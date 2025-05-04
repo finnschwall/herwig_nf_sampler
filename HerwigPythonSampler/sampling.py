@@ -10,7 +10,6 @@ sys.path.append('/mnt/data-slow/herwig/python/madnis')
 import herwig_python
 
 import Dataset
-import FlowTrainer
 
 import time
 import numpy as np
@@ -20,6 +19,7 @@ import re
 import logging
 from tqdm import tqdm
 import settings
+from MadnisFlow import MadnisMultiChannelIntegrator, MadnisFlow
 
 
 in_files = glob.glob('*.in')
@@ -103,6 +103,9 @@ def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_co
     # data_preprocessor = Dataset.ChannelDataPreprocessor(channel_count)
     # datasets = data_preprocessor.get_datasets(ps_points, cross_sections, int(config["TRAINING_PARAMETERS"]["channel_selection_dim"]))
 
+    
+    flows = []
+    last_trainer = None
     for i in tqdm(range(len(channel_phase_space))):
         if channel_weights[i] == 0:
              continue
@@ -111,15 +114,19 @@ def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_co
         os.makedirs(basepath, exist_ok=True)
         basepath = os.path.join(basepath, f"channel_{i}")
         os.makedirs(basepath, exist_ok=True)
-        flow_trainer = FlowTrainer.MadnisFlow(channel_phase_space[i], channel_cross_sections[i], 
+        flow_trainer = MadnisFlow(channel_phase_space[i], channel_cross_sections[i], 
                                               python_sampler.dSigDRMatrix, basepath, n_dims, i,
                                                 len(channel_phase_space),single_channel=True)
         logger.info(f"Training channel {i} of {channel_count}. # of points: {len(channel_phase_space[i])}, tot. cross section: {np.sum(channel_cross_sections[i]):.2e}")
         flow_trainer.train()
-        exit()
-        # flow_trainer.train_single_channel(channel_phase_space[i], channel_cross_sections[i], dir_path=f"PythonSampler/{current_process}/{matrix_name}/channel_{i}")
+        flows.append(flow_trainer.model)
+        last_trainer = flow_trainer
+        
+    multichannel_integrator = MadnisMultiChannelIntegrator(flows, last_trainer.matrix_callback, channel_weights)
+    result = multichannel_integrator.integrate(sample_size=1000)
+    print(result)
 
-
+    exit()
     if bin_number == bin_count - 1:
         process_info["end_time"] = time.time()
         process_info["total_time"] = process_info["end_time"] - process_info["start_time"]

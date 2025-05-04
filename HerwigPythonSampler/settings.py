@@ -6,7 +6,7 @@ if os.path.exists('config.ini'):
 else:
     from decouple import config
 
-INITIAL_POINTS = config('INITIAL_POINTS', default=100000, cast=int)
+INITIAL_POINTS = config('INITIAL_POINTS', default=20000, cast=int)
 CHANNEL_SELECTION_DIM = config('CHANNEL_SELECTION_DIM', default=1, cast=int)
 """0 for LEP, 1 for LHC (usually)"""
 

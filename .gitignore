@@ -11,6 +11,9 @@ exsample
 Makefile
 Makefile.in
 
+herwig-mergegrids
+herwig-mergegrids.in
+
 GeneralSampler.cc
 GeneralSampler.h
 
