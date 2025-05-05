@@ -19,7 +19,7 @@ import re
 import logging
 from tqdm import tqdm
 import settings
-from MadnisFlow import MadnisMultiChannelIntegrator, MadnisFlow
+from FlowSampler import MultiChannelFlowSampler
 
 
 in_files = glob.glob('*.in')
@@ -72,59 +72,13 @@ def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_co
     ps_points = np.random.rand(int(settings.INITIAL_POINTS), n_dims)
     n_dims = n_dims -1 #remove channel selection dimension
     cross_sections = python_sampler.dSigDRMatrix(ps_points)
-    total_cross_section = np.sum(cross_sections)
+    
     ps_sampling_time = time.time() - start_time
 
-    data_preprocessor = Dataset.ChannelDataPreprocessor(channel_count)
-    channel_phase_space, channel_cross_sections = data_preprocessor.split_by_channel(ps_points, cross_sections, int(settings.CHANNEL_SELECTION_DIM))
-    tot_cross_section_per_channel = np.array([np.sum(i) for i in channel_cross_sections])
-    channel_weights = tot_cross_section_per_channel / total_cross_section
-    logger.info(f"Channel weights: {channel_weights}")
-    expected_weight = 1 / channel_count
-    drop_threshold = float(settings.CHANNEL_DROP_THRESHOLD)*expected_weight
-    if np.sum(channel_weights > drop_threshold) > 0:
-        dropped_weights = channel_weights[channel_weights < drop_threshold]
-        logger.info(f"Dropping channels {np.where(channel_weights < drop_threshold)[0]} with weight < {max(dropped_weights):.4f} (Exp. Weight: {expected_weight:.4f})")
-        #recalculate to make sure weights sum to 1
-        tot_cross_section_per_channel = np.where(channel_weights > drop_threshold, tot_cross_section_per_channel, 0)
-        total_cross_section = np.sum(tot_cross_section_per_channel)
-        channel_weights = tot_cross_section_per_channel / total_cross_section
-        logger.info(f"New channel weights: {channel_weights}")
-    process_info["channels"][matrix_name] = {}
-    process_info["channels"][matrix_name]["channel_weights"] = channel_weights.tolist()
-    process_info["channels"][matrix_name]["remaining_channel_count"] = int(np.sum(channel_weights > drop_threshold))
-    process_info["channels"][matrix_name]["total_cross_section"] = total_cross_section
-    process_info["channels"][matrix_name]["ps_sampling_time"] = ps_sampling_time
-    process_info["channels"][matrix_name]["channel_cross_sections"] = tot_cross_section_per_channel.tolist()
-
-    
-    # flow_trainer.train_multi_channel(ps_points, cross_sections, )
-    
-    # data_preprocessor = Dataset.ChannelDataPreprocessor(channel_count)
-    # datasets = data_preprocessor.get_datasets(ps_points, cross_sections, int(config["TRAINING_PARAMETERS"]["channel_selection_dim"]))
-
-    
-    flows = []
-    last_trainer = None
-    for i in tqdm(range(len(channel_phase_space))):
-        if channel_weights[i] == 0:
-             continue
-        
-        basepath = f"PythonSampler/{current_process}/{matrix_name}"
-        os.makedirs(basepath, exist_ok=True)
-        basepath = os.path.join(basepath, f"channel_{i}")
-        os.makedirs(basepath, exist_ok=True)
-        flow_trainer = MadnisFlow(channel_phase_space[i], channel_cross_sections[i], 
-                                              python_sampler.dSigDRMatrix, basepath, n_dims, i,
-                                                len(channel_phase_space),single_channel=True)
-        logger.info(f"Training channel {i} of {channel_count}. # of points: {len(channel_phase_space[i])}, tot. cross section: {np.sum(channel_cross_sections[i]):.2e}")
-        flow_trainer.train()
-        flows.append(flow_trainer.model)
-        last_trainer = flow_trainer
-        
-    multichannel_integrator = MadnisMultiChannelIntegrator(flows, last_trainer.matrix_callback, channel_weights)
-    result = multichannel_integrator.integrate(sample_size=1000)
-    print(result)
+    integrator = MultiChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}" ,n_dims, channel_count,matrix_name=matrix_name, 
+                                              current_process_name =current_process, single_channel=False)
+    integrator.prepare_data(ps_points, cross_sections)
+    integrator.train()
 
     exit()
     if bin_number == bin_count - 1:

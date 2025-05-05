@@ -37,9 +37,6 @@ class AbstractSampler:
         pass
 
 
-
-
-
     def plot_dims(self, n_points=None):
         n_rows = (self.n_dims + 3) // 4
         fig, axes = plt.subplots(nrows=n_rows, ncols=4, figsize=(20, 5 * n_rows))
