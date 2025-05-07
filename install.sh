@@ -138,7 +138,7 @@ EOL
 echo "\n\n\n"
 echo "Finished!"
 echo "To activate the environment (for running and developing), run:"
-echo "source $BASE_DIR/activate_herwig.sh"
+echo "source $BASE_DIR/activate_herwig"
 if [ "$cuda_available" != "True" ]; then
     echo "REMINDER: Pytorch was installed without CUDA support. Check your CUDA installation. Without you will only be able to use this library for inference!"
 fi
