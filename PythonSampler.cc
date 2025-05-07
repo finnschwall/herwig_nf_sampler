@@ -22,30 +22,91 @@ PythonSampler::PythonSampler()
 
 PythonSampler::~PythonSampler() = default;
 
+
 double PythonSampler::generate() {
-    // pybind11::tuple result = sampling.attr("generate")(1);
-    // std::vector<double> p = result[0].cast<std::vector<double>>();
-    // double probability = result[1].cast<double>();
-    // double channelWeight = result[2].cast<double>();
-    // double w = eventHandler()->dSigDR(p) / nanobarn;
-    // lastPoint() = p;
-    // select(w);
-    // if(probability == 0.0 || w == 0.0 || channelWeight == 0.0) {
-    //     return 0;
-    // }
-    // w  = w*channelWeight/probability;
-    // if ( w != 0.0 )
-    //     accept();
-    // return w;
-    py::tuple result = sampling.attr("generate")(1);
-    double w = result[1].cast<double>();
-    lastPoint() = result[0].cast<std::vector<double>>();
+    // Get point, probability, and function value from your NF
+    pybind11::tuple result = sampling.attr("generate")();
+    std::vector<double> psPoint = result[0].cast<std::vector<double>>();  // The sampled point
+    double probability = result[1].cast<double>();                       // PDF at the point
+    double funcValue = result[2].cast<double>();                         // Function value at the point
     
+    // Calculate the weight (func_val / prob)
+    double w = probability > 0 ? funcValue / probability : 0.0;
+    
+    // Apply importance sampling similar to the original code
+    if (!weighted() && initialized()) {
+        double p = min(abs(w), kappa() * referenceWeight()) / (kappa() * referenceWeight());
+        double sign = w >= 0. ? 1. : -1.;
+        if (p < 1 && UseRandom::rnd() > p)
+            w = 0.;
+        else
+            w = sign * max(abs(w), referenceWeight() * kappa());
+    }
+    
+    // Update the last point (you'll need to implement this)
+    lastPoint() = psPoint;
+    
+    // Select this weight
     select(w);
-    if ( w != 0.0 )
-      accept();
+    
+    // Accept the point if weight is non-zero
+    if (w != 0.0)
+        accept();
+        
+    assert(kappa() == 1. || sampler()->almostUnweighted());
+    // std::cout << "w:" << w << " kappa:" << kappa() << " ref:" << referenceWeight() << std::endl;
     return w;
 }
+
+// double PythonSampler::generate(){
+//     pybind11::tuple result = sampling.attr("generate")();
+//     std::vector<double> p = result[0].cast<std::vector<double>>();
+//     double probability = result[1].cast<double>();
+//     double w = result[2].cast<double>()/probability;
+//     // double maxWeight = result[3].cast<double>();
+
+//     double rand = UseRandom::rnd();
+//     if (rand < w / referenceWeight()) {
+//         // Accept the event
+//         lastPoint() = p;
+//         w=referenceWeight();
+//     } else {
+//         select(0.0);
+//         return 0.0;
+//     }
+   
+//     select(w);
+//     if ( w != 0.0 )
+//       accept();
+//     assert(kappa()==1.||sampler()->almostUnweighted());
+//     return w;
+// }
+
+// double PythonSampler::generate() {
+//     pybind11::tuple result = sampling.attr("generate")();
+//     std::vector<double> p = result[0].cast<std::vector<double>>();
+//     double probability = result[1].cast<double>();
+//     double w = result[2].cast<double>();
+//     // double w = eventHandler()->dSigDR(p) / nanobarn;
+//     lastPoint() = p;
+//     select(w);
+//     if(probability == 0.0 || w == 0.0) {
+//         return 0;
+//     }
+//     w  = w/probability;
+//     if ( w != 0.0 )
+//         accept();
+
+//     return w;
+//     // py::tuple result = sampling.attr("generate")(1);
+//     // double w = result[1].cast<double>();
+//     // lastPoint() = result[0].cast<std::vector<double>>();
+    
+//     // select(w);
+//     // if ( w != 0.0 )
+//     //   accept();
+//     // return w;
+// }
 
 double PythonSampler::dSigDR(std::vector<double> p) {
     double w = eventHandler()->dSigDR(p) / nanobarn;
@@ -56,11 +117,11 @@ double PythonSampler::dSigDR(std::vector<double> p) {
     return w;
 }
 
-double PythonSampler::dSigDRRun(std::vector<double> p, double probability, double channelWeight) {
-    double w = eventHandler()->dSigDR(p) / nanobarn;
+double PythonSampler::dSigDRRun(std::vector<double> p, double probability, double w) {
+    // double w = eventHandler()->dSigDR(p) / nanobarn;
     lastPoint() = p;
     select(w);
-    if(probability == 0.0 || w == 0.0 || channelWeight == 0.0) {
+    if(probability == 0.0 || w == 0.0) {
         return 0;
     }
     w  = w/probability;
@@ -112,6 +173,10 @@ void PythonSampler::initialize(bool progress) {
     int nDims2 = dimension();
     // std::cout << "nDims matrix element" << nDims2 << std::endl;
     int diagDim = xComb.diagrams().size();
+
+    cout << "WEIGHTED:" << weighted() << endl;
+    cout << "REFWEIGHT:" << referenceWeight() << endl;
+    cout << "KAPPA:" << kappa() << endl;
     try{
 
         // auto xc = handler->xCombs()[0];
@@ -198,6 +263,9 @@ void PythonSampler::initialize(bool progress) {
       std::cout << "Failed to import sampling" << std::endl;
       std::cout << e.what() << std::endl;
     }
+    cout << "INITIALPOINTS:" << 1000 << endl;
+    runIteration(10000,progress);
+    cout << "REFWEIGHT:" << referenceWeight() << endl;
     isInitialized();
 }
 
@@ -214,6 +282,9 @@ PYBIND11_EMBEDDED_MODULE(herwig_python, m) {
 void PythonSampler::finalize(bool) {
     try
     {
+        cout << "final integrated cross section is ( "
+        << integratedXSec()/nanobarn << " +/- "
+        << integratedXSecErr()/nanobarn << " ) nb\n" << endl;
         // std::cout << "Python Sampler finalize" << std::endl;
         // py::finalize_interpreter();
     }

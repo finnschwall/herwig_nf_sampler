@@ -19,7 +19,7 @@ import re
 import logging
 from tqdm import tqdm
 import settings
-from FlowSampler import MultiChannelFlowSampler, SingleChannelFlowSampler
+from FlowSampler import SingleChannelFlowSampler
 import traceback
 
 in_files = glob.glob('*.in')
@@ -62,6 +62,7 @@ except FileNotFoundError:
 sampler = None
 
 def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count):
+    global sampler
     if bin_number == 0:
         logger.info(f"Starting training for {bin_count} diagrams for process {current_process}")
         process_info["start_time"] = time.time()
@@ -72,20 +73,16 @@ def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_co
 
     start_time = time.time()
     ps_points = np.random.rand(int(settings.INITIAL_POINTS), n_dims)
-    n_dims = n_dims -1 #remove channel selection dimension
+    # n_dims = n_dims -1 #remove channel selection dimension
     cross_sections = python_sampler.dSigDRMatrix(ps_points)
     
     ps_sampling_time = time.time() - start_time
 
-    # integrator = MultiChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}" ,n_dims, channel_count,matrix_name=matrix_name, 
-    #                                           current_process_name =current_process, single_channel=False)
-    # integrator.prepare_data(ps_points, cross_sections)
-    # integrator.train()
-    integrator = SingleChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}" ,n_dims+1, 1, matrix_name=matrix_name,
+    integrator = SingleChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}/{matrix_name}" ,n_dims, 1, matrix_name=matrix_name,
                                                 current_process_name =current_process, single_channel=True)
     integrator.prepare_data(ps_points, cross_sections)
-    integrator.train()
-    exit()
+    integrator.train(verbose=True)
+    integrator.save()
 
     process_info[matrix_name] = integrator.meta
     if bin_number == bin_count - 1:
@@ -101,47 +98,71 @@ def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_co
 
     with open(f"PythonSampler/{current_process}/process_info.json", "w") as f: 
         json.dump(process_info, f, indent=4)
-    integrator.integrate(2000)
-    integrator.integrate(2000)
-    integrator.integrate(2000)
-    try:
-        x, prob, channel_weights = integrator.sample(1000)
-        for i in range(len(x)):
-            python_sampler.dSigDRRun(x[i], prob[i], channel_weights[i])
-    except Exception as e:
-        traceback.print_exc()
-        raise e
+    sampler = integrator
+    # try:
+    #     x, prob, func_vals = integrator.sample(10000, numpy=True)
+    #     # func_vals/=10
+    #     for i in range(len(x)):
+    #         python_sampler.dSigDRRun(x[i], prob[i], func_vals[i])
+    # except Exception as e:
+    #     traceback.print_exc()
+    #     raise e
     
 g_python_sampler = None
 def load(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count):
     global sampler, g_python_sampler
     g_python_sampler = python_sampler
     try:
-        n_dims = n_dims -1
-        with open(f"PythonSampler/{current_process}/process_info.json", "r") as f:
-            process_info = json.load(f)
-        channel_weights = process_info[matrix_name]["channels"]["channel_weights"]
-        integrator = MultiChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}" ,n_dims, channel_count,matrix_name=matrix_name, 
-                                                current_process_name =current_process, single_channel=False)
-        integrator.load(channel_weights)
+        integrator = SingleChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}/{matrix_name}" ,n_dims, 1, matrix_name=matrix_name,
+                                                current_process_name =current_process, single_channel=True)
+        integrator.load()
         sampler = integrator
     except Exception as e:
         traceback.print_exc()
         raise e
-    from madnis.integrator import Integrator, Integrand
-    integrand = Integrand(integrator.model[0].matrix_callback, input_dim=n_dims)
-    mad_integ = Integrator(integrand, flow = integrator.model[0].model.to("cpu"))
-    sampler = mad_integ
-    result, error = mad_integ.integrate(100)
-    print(f"Integration result: {result:.5f} +- {error:.5f}")
+    # print(integrator.integrate(2000))
+    # print(integrator.integrate(2000))
+    # print(integrator.integrate(2000))
+    # from madnis.integrator import Integrator, Integrand
+    # integrand = Integrand(integrator.model[0].matrix_callback, input_dim=n_dims)
+    # mad_integ = Integrator(integrand, flow = integrator.model[0].model.to("cpu"))
+    # sampler = mad_integ
+    # result, error = mad_integ.integrate(100)
+    # print(f"Integration result: {result:.5f} +- {error:.5f}")
 
 
+
+stored_x = []
+stored_prob = []
+stored_func_vals = []
+max_weight = 0
+current_idx = 0
+def generate():
+    global sampler, stored_x, stored_prob, stored_func_vals, current_idx, max_weight
+    if current_idx >= len(stored_x):
+        x, prob, func_vals = sampler.sample(2000, numpy=True)
+        weights = func_vals / prob
+        max_weight = weights.max().item()
+        # unweighted_indices = []
+        # valid_indices = np.where(weights > 0)[0]
+        # if len(valid_indices) > 0:
+        #     for idx in valid_indices:
+        #         # Accept with probability proportional to weight / max_weight
+        #         if np.random.uniform(0, 1) < weights[idx] / max_weight:
+        #             unweighted_indices.append(idx)
+        # x = x[unweighted_indices]
+        # prob = prob[unweighted_indices]
+        # func_vals = func_vals[unweighted_indices]
+        stored_x = x.tolist()
+        stored_prob = prob.tolist()
+        stored_func_vals = func_vals.tolist()
+        current_idx = 0
+        estimated_integral = sampler._integrate(func_vals, prob, 2000)
+        logger.info(f"Sampling new points. Est. Integ.:{estimated_integral['integral']:.3f}, Max weight: {max_weight:.3f}")
         
-
-def generate(n_samples):
-    global sampler
-    samples = sampler.sample(n_samples)
-    ret_tuple = (samples.x.tolist()[0], samples.func_vals[0], samples.weights[0])
+        
+    ret_tuple = (stored_x[current_idx], stored_prob[current_idx], stored_func_vals[current_idx], max_weight)
+    current_idx += 1
     return ret_tuple
     
     try:

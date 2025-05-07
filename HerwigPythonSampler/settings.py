@@ -6,8 +6,8 @@ if os.path.exists('config.ini'):
 else:
     from decouple import config
 
-INITIAL_POINTS = config('INITIAL_POINTS', default=100000, cast=int)
-TRAINING_EPOCHS = config('TRAINING_EPOCHS', default=15, cast=int)
+INITIAL_POINTS = config('INITIAL_POINTS', default=30000, cast=int)
+TRAINING_EPOCHS = config('TRAINING_EPOCHS', default=10, cast=int)
 
 CHANNEL_SELECTION_DIM = config('CHANNEL_SELECTION_DIM', default=1, cast=int)
 """0 for LEP, 1 for LHC (usually)"""
@@ -22,7 +22,7 @@ CHANNEL_DROP_THRESHOLD = config('CHANNEL_DROP_THRESHOLD', default=0.05, cast=flo
 USE_CUDA = config('USE_CUDA', default=True, cast=bool)
 """GPU acceleration. Strongly recommended if available."""
 
-COLLECT_TRAINING_INTEGRATION_METRICS = config('COLLECT_TRAINING_INTEGRATION_METRICS', default=True, cast=bool)
+COLLECT_TRAINING_INTEGRATION_METRICS = config('COLLECT_TRAINING_INTEGRATION_METRICS', default=False, cast=bool)
 """Collect training integration metrics. This will slow down the training process significantly.
     Use only for debugging purposes.
 """
