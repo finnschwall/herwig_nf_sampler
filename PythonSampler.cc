@@ -35,12 +35,12 @@ double PythonSampler::generate() {
     
     // Apply importance sampling similar to the original code
     if (!weighted() && initialized()) {
-        double p = min(abs(w), kappa() * referenceWeight()) / (kappa() * referenceWeight());
+        double p = min(abs(w), kappa() * 10.4) / (kappa() * 10.4);
         double sign = w >= 0. ? 1. : -1.;
         if (p < 1 && UseRandom::rnd() > p)
             w = 0.;
         else
-            w = sign * max(abs(w), referenceWeight() * kappa());
+            w = sign * max(abs(w), 10.4 * kappa());
     }
     
     // Update the last point (you'll need to implement this)

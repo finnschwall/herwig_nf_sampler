@@ -40,12 +40,12 @@ HwSampling_la_LIBADD = \
     -lpython3.10
 
 # Specify the library paths for linking
-HwSampling_la_LDFLAGS += -L/home/finn/.pyenv/versions/3.10.16/lib
+HwSampling_la_LDFLAGS += -L/mnt/data-slow/Herwig/Python-3.10.16/install/lib
 
 # Specify the include paths for Pybind11 and Python
 HwSampling_la_CPPFLAGS = $(AM_CPPFLAGS) \
-                        -I/home/finn/.pyenv/versions/3.10.16/include/python3.10 \
-                        -I/home/finn/.pyenv/versions/madnis/lib/python3.10/site-packages/pybind11/include
+                        -I/mnt/data-slow/Herwig/Python-3.10.16/install/include/python3.10 \
+                        -I/mnt/data-slow/Herwig/venv_herwig/lib/python3.10/site-packages/pybind11/include
 
 # Specify the C++ compiler flags
 HwSampling_la_CXXFLAGS = $(AM_CXXFLAGS)
