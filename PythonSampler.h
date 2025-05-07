@@ -47,6 +47,7 @@ namespace Herwig {
         // std::unique_ptr<py::scoped_interpreter> guard;
         
         double dSigDR(std::vector<double> p);
+        double dSigDRRun(std::vector<double> p, double probability, double channelWeight);
         std::vector<double> dSigDRMatrix(const std::vector<std::vector<double>>& matrix);
 
         /**

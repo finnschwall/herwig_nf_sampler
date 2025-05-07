@@ -19,8 +19,8 @@ import re
 import logging
 from tqdm import tqdm
 import settings
-from FlowSampler import MultiChannelFlowSampler
-
+from FlowSampler import MultiChannelFlowSampler, SingleChannelFlowSampler
+import traceback
 
 in_files = glob.glob('*.in')
 current_process = "UNKNOWN"
@@ -59,6 +59,8 @@ try:
 except FileNotFoundError:
     pass
 
+sampler = None
+
 def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count):
     if bin_number == 0:
         logger.info(f"Starting training for {bin_count} diagrams for process {current_process}")
@@ -75,12 +77,17 @@ def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_co
     
     ps_sampling_time = time.time() - start_time
 
-    integrator = MultiChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}" ,n_dims, channel_count,matrix_name=matrix_name, 
-                                              current_process_name =current_process, single_channel=False)
+    # integrator = MultiChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}" ,n_dims, channel_count,matrix_name=matrix_name, 
+    #                                           current_process_name =current_process, single_channel=False)
+    # integrator.prepare_data(ps_points, cross_sections)
+    # integrator.train()
+    integrator = SingleChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}" ,n_dims+1, 1, matrix_name=matrix_name,
+                                                current_process_name =current_process, single_channel=True)
     integrator.prepare_data(ps_points, cross_sections)
     integrator.train()
-
     exit()
+
+    process_info[matrix_name] = integrator.meta
     if bin_number == bin_count - 1:
         process_info["end_time"] = time.time()
         process_info["total_time"] = process_info["end_time"] - process_info["start_time"]
@@ -94,8 +101,55 @@ def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_co
 
     with open(f"PythonSampler/{current_process}/process_info.json", "w") as f: 
         json.dump(process_info, f, indent=4)
+    integrator.integrate(2000)
+    integrator.integrate(2000)
+    integrator.integrate(2000)
+    try:
+        x, prob, channel_weights = integrator.sample(1000)
+        for i in range(len(x)):
+            python_sampler.dSigDRRun(x[i], prob[i], channel_weights[i])
+    except Exception as e:
+        traceback.print_exc()
+        raise e
     
+g_python_sampler = None
+def load(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count):
+    global sampler, g_python_sampler
+    g_python_sampler = python_sampler
+    try:
+        n_dims = n_dims -1
+        with open(f"PythonSampler/{current_process}/process_info.json", "r") as f:
+            process_info = json.load(f)
+        channel_weights = process_info[matrix_name]["channels"]["channel_weights"]
+        integrator = MultiChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}" ,n_dims, channel_count,matrix_name=matrix_name, 
+                                                current_process_name =current_process, single_channel=False)
+        integrator.load(channel_weights)
+        sampler = integrator
+    except Exception as e:
+        traceback.print_exc()
+        raise e
+    from madnis.integrator import Integrator, Integrand
+    integrand = Integrand(integrator.model[0].matrix_callback, input_dim=n_dims)
+    mad_integ = Integrator(integrand, flow = integrator.model[0].model.to("cpu"))
+    sampler = mad_integ
+    result, error = mad_integ.integrate(100)
+    print(f"Integration result: {result:.5f} +- {error:.5f}")
 
-def load(python_sampler, n_dims):
-    python_sampler_instance.setup_base(python_sampler, n_dims)
-    return python_sampler_instance.load()
+
+        
+
+def generate(n_samples):
+    global sampler
+    samples = sampler.sample(n_samples)
+    ret_tuple = (samples.x.tolist()[0], samples.func_vals[0], samples.weights[0])
+    return ret_tuple
+    
+    try:
+        x, prob, channel_weights = sampler.sample(1000)
+        for i in range(len(x)):
+            # print(f"Sampled point: {x[i]}, Probability: {prob[i]}, Channel weights: {channel_weights[i]}")
+            g_python_sampler.dSigDRRun(x[i], prob[i], channel_weights[i])
+    except Exception as e:
+        traceback.print_exc()
+        raise e
+    return sampler.sample(n_samples)

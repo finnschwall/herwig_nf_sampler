@@ -49,18 +49,18 @@ class FlowSampler:
         self.meta = {}
     
     def matrix_callback(self, x, channel=None):
-        if channel is None:
-            channel = torch.zeros((x.shape[0],))
-        else:
-            if isinstance(channel, torch.Tensor):
-                channel = channel.float()/ self.channel_count
-            elif isinstance(channel, int):
-                channel_tensor_size = (x.shape[0],)
-                channel = torch.full(channel_tensor_size, channel / self.channel_count)
-            else:
-                raise ValueError("Channel must be a tensor or an integer.")
+        # if channel is None:
+        #     channel = torch.zeros((x.shape[0],))
+        # else:
+        #     if isinstance(channel, torch.Tensor):
+        #         channel = channel.float()/ self.channel_count
+        #     elif isinstance(channel, int):
+        #         channel_tensor_size = (x.shape[0],)
+        #         channel = torch.full(channel_tensor_size, channel / self.channel_count)
+        #     else:
+        #         raise ValueError("Channel must be a tensor or an integer.")
         x=x.to("cpu")
-        x = torch.cat((x[:, :self.channel_selection_dim], channel.unsqueeze(1), x[:, self.channel_selection_dim:]), dim=1)
+        # x = torch.cat((x[:, :self.channel_selection_dim], channel.unsqueeze(1), x[:, self.channel_selection_dim:]), dim=1)
         matrix_list = x.tolist()
         result = self.integrand(matrix_list)
         result_tensor = torch.tensor(result)
@@ -143,7 +143,7 @@ class SingleChannelFlowSampler(FlowSampler):
     #         else:
     #             return x.cpu().numpy(), func_vals.cpu().numpy()
 
-    def sample(self, n_samples, return_prob=True, numpy=False, force_nonzero=False, max_attempts=5):
+    def sample(self, n_samples, return_prob=True, numpy=False, force_nonzero=False, max_attempts=5, only_sample=False):
         """
         Sample from the model and compute function values.
         
@@ -163,6 +163,18 @@ class SingleChannelFlowSampler(FlowSampler):
                 return_prob=True,
                 device=self.device
             )
+        #exponentiate prob
+        # prob = torch.exp(prob)
+        if only_sample:
+            if return_prob:
+                if not numpy:
+                    return x, prob
+                else:
+                    return x.cpu().numpy(), prob.cpu().numpy()
+            if not numpy:
+                return x
+            else:
+                return x.cpu().numpy()
         
         func_vals = self.matrix_callback(x, self.channel_number)
         zero_count = torch.sum(func_vals == 0).item()
@@ -274,20 +286,22 @@ class SingleChannelFlowSampler(FlowSampler):
 
         self.model = flow_best
 
-        self.integ_metrics = {
-            "effective_sample_sizes": [self.integrate(1000)["effective_sample_size"]],
-            "unweighting_efficiencies": [self.integrate(1000)["unweighting_efficiency"]],
-            "variance_50_samples": [self.repeat_integrate(50)["error"]],
-            "variance_100_samples": [self.repeat_integrate(100)["error"]],
-            "variance_1000_samples": [self.integrate(1000)["error"]],
-            "zero_count" : [self.integrate(1000)["zero_count"]]
-        }
-        
-
-        self.plot_integral(close_plot=False, label="Untrained model 1", save=False)
-        self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-        self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-        self.plot_integral(close_plot=True, label="Untrained model 2", file_name="integral_convergence_before_training.png", save=True)
+        if settings.COLLECT_TRAINING_INTEGRATION_METRICS:
+            self.integ_metrics = {
+                "effective_sample_sizes": [self.integrate(1000)["effective_sample_size"]],
+                "unweighting_efficiencies": [self.integrate(1000)["unweighting_efficiency"]],
+                "variance_50_samples": [self.repeat_integrate(50)["error"]],
+                "variance_100_samples": [self.repeat_integrate(100)["error"]],
+                "variance_1000_samples": [self.integrate(1000)["error"]],
+                "zero_count" : [self.integrate(1000)["zero_count"]]
+            }
+            self.plot_integral(close_plot=False, label="Untrained model 1", save=False)
+            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
+            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
+            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
+            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
+            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
+            self.plot_integral(close_plot=True, label="Untrained model 2", file_name="integral_convergence_before_training.png", save=True)
 
         for epoch in progress_bar:
             flow.train()
@@ -308,40 +322,34 @@ class SingleChannelFlowSampler(FlowSampler):
                 best_loss = epoch_loss
                 flow_best.load_state_dict(flow.state_dict())
                 self.model = flow_best
+            if settings.COLLECT_TRAINING_INTEGRATION_METRICS:
+                res_1000 = self.repeat_integrate(1000, 3)
+                self.integ_metrics["effective_sample_sizes"].append(res_1000["effective_sample_size"])
+                self.integ_metrics["unweighting_efficiencies"].append(res_1000["unweighting_efficiency"])
+                self.integ_metrics["zero_count"].append(res_1000["zero_count"])
+                self.integ_metrics["variance_1000_samples"].append(res_1000["error"])
 
-            res_1000 = self.repeat_integrate(1000, 3)
-            self.integ_metrics["effective_sample_sizes"].append(res_1000["effective_sample_size"])
-            self.integ_metrics["unweighting_efficiencies"].append(res_1000["unweighting_efficiency"])
-            self.integ_metrics["zero_count"].append(res_1000["zero_count"])
-            self.integ_metrics["variance_1000_samples"].append(res_1000["error"])
-
-            self.integ_metrics["variance_50_samples"].append(self.repeat_integrate(50)["error"])
-            self.integ_metrics["variance_100_samples"].append(self.repeat_integrate(100)["error"])
-
-            
-            
-
-            # self.variance_50_samples.append(self.integrate(50)["error"])
-            # self.variance_100_samples.append(self.repeat_integrate(100)["error"])
-            # self.variance_500_samples.append(self.integrate(200)["error"])
-            # res_1000 = self.integrate(1000)
-            # self.effective_sample_sizes.append(res_1000["effective_sample_size"])
-            # self.unweighting_efficiencies.append(res_1000["unweighting_efficiency"])
-            # self.variance_1000_samples.append(res_1000["error"])
-            # self.count_0.append(res_1000["zero_count"])
+                self.integ_metrics["variance_50_samples"].append(self.repeat_integrate(50)["error"])
+                self.integ_metrics["variance_100_samples"].append(self.repeat_integrate(100)["error"])
             
             # if epoch % 5 == 0:
             #     self.model = flow_best
             #     self.plot_integral(file_name=f"integral_convergence_epoch_{epoch}.png")
         self.model = flow_best
         self.losses = tot_losses
-        self.plot_integral(label="Trained model 1", close_plot=False, save=False)
-        self.plot_integral(label="Trained model 2", close_plot=False, save=False)
-        self.plot_integral(label="Trained model 3", close_plot=False, save=False)
-        self.plot_integral(label="Trained model 4", close_plot=True, save=True)
+
+        if settings.COLLECT_TRAINING_INTEGRATION_METRICS:
+            self.plot_integral(label="Trained model 1", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 2", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 4", close_plot=True, save=True)
+            self.plot_integration_metrics()
         
         self.plot_dims()
-        self.plot_integration_metrics()
+        
 
         plt.figure(figsize=(10, 6))
         plt.plot(self.losses)
@@ -421,7 +429,7 @@ class SingleChannelFlowSampler(FlowSampler):
         a, b = popt
         fit_line = fit_function(x_values, a, b)
         # plt.plot(x_values, fit_line, 'r-', label=f"Fit: $a \\cdot \\sqrt{{x}} + b$\na={a:.2f}, b={b:.2f}")
-        plt.plot(x_values, means, 'o-', label=label)
+        plt.plot(x_values, means, 'o-', label=f'{result["integral"]:.3f}+-{result["error"]:.3f}')#label=label)
         # plt.errorbar(x_values, means, yerr=errors, fmt='o', capsize=5, label="Integral Means")
         plt.fill_between(x_values, means - errors, means + errors, color='blue', alpha=0.1)
 
@@ -439,9 +447,77 @@ class SingleChannelFlowSampler(FlowSampler):
     def save(self):
         model_path = os.path.join(self.basepath, "best_model.pth")
         torch.save(self.model.state_dict(), model_path)
+    
+    def load(self, path=None):
+        self.model = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
+        if path is None:
+            path = os.path.join(self.basepath, "best_model.pth")
+        self.model.load_state_dict(torch.load(path))
 
 
 class MultiChannelFlowSampler(FlowSampler):
+    def _integrate(self, func_vals, prob, channel_weights, sample_size):
+        assert sample_size != 0, "Sample size cannot be zero"
+        assert np.sum(prob) != 0, "Summed probability cannot be zero"
+        zero_mask = func_vals == 0
+        weights = func_vals / prob
+        weights = np.where(prob == 0, 0, func_vals / prob)
+        integral = np.sum(weights) / sample_size
+        error = np.sqrt(np.var(weights) / sample_size)
+        if np.sum(weights) == 0:
+            normalized_weights = np.zeros_like(weights)
+            ess=0
+            unweighting_efficiency = 0
+        else:
+            normalized_weights = weights / weights.sum()
+            ess = 1.0 / (normalized_weights ** 2).sum().item()
+            unweighting_efficiency = weights.mean()/weights.max().item()
+        normalized_weights = weights / weights.sum()
+        return {
+            "integral": integral.item(),
+            "error": error.item(),
+            "ess": ess,
+            "effective_sample_size": ess,
+            "unweighting_efficiency": unweighting_efficiency,
+            "zero_count": zero_mask.sum(),
+        }
+
+
+    def integrate(self, sample_size):
+        # channel_numbers = np.random.choice(self.channel_count, sample_size, p=self.channel_weights)
+        # x, prob, channel_weights,func_vals = [], [], [], []
+        # for i in range(len(channel_numbers)):
+        #     if self.model[channel_numbers[i]] is None:
+        #         prob.append(0)
+        #         x.append(np.zeros((self.n_dims)))
+        #         channel_weights.append(0)
+        #         continue
+        #     x_i, prob_i, func_vals_i = self.model[channel_numbers[i]].sample(1, return_prob=True, numpy=True)
+        #     x.append(x_i[0])
+        #     prob.append(prob_i[0])
+        #     func_vals.append(func_vals_i[0])
+        #     channel_weights.append(self.channel_weights[channel_numbers[i]])
+        channel_numbers = (self.channel_weights*sample_size).astype(int)
+        x, prob, func_vals, channel_weights = [], [], [], []
+        for i in range(len(channel_numbers)):
+            if self.model[i] is None:
+                continue
+            x_i, prob_i, func_vals_i = self.model[i].sample(channel_numbers[i], return_prob=True, numpy=True)
+            x.append(x_i)
+            prob.append(prob_i)
+            func_vals.append(func_vals_i)
+            channel_weights.append(self.channel_weights[i]*channel_numbers[i])
+        prob = np.concatenate(prob, axis=0)
+        func_vals = np.concatenate(func_vals,axis=0)
+        # channel_weights = np.concatenate(channel_weights,axis=0)
+        x = np.concatenate(x)
+        # x = np.array(x)
+        # prob = np.array(prob)
+        # func_vals = np.array(func_vals)
+        channel_weights = np.array(channel_weights)
+        result = self._integrate(func_vals, prob, channel_weights, sample_size)
+        print(result)
+
     def prepare_data(self, phase_space_points, cross_sections):
         total_cross_section = np.sum(cross_sections)
         data_preprocessor = Dataset.ChannelDataPreprocessor(self.channel_count)
@@ -470,6 +546,33 @@ class MultiChannelFlowSampler(FlowSampler):
             "channel_cross_sections": tot_cross_section_per_channel.tolist()
         }
     
+    def sample(self, n_samples):
+        # channel_numbers = np.random.randint(0, self.channel_count, n_samples)
+        channel_numbers = np.random.choice(self.channel_count, n_samples, p=self.channel_weights)
+        x, prob, channel_weights = [], [], []
+        for i in range(len(channel_numbers)):
+            if self.model[channel_numbers[i]] is None:
+                prob.append(0)
+                x.append(np.zeros((self.n_dims)))
+                channel_weights.append(0)
+                continue
+            x_i, prob_i = self.model[channel_numbers[i]].sample(1, return_prob=True, numpy=True, only_sample=True)
+            x.append(x_i[0])
+            prob.append(prob_i[0])
+            channel_weights.append(self.channel_weights[channel_numbers[i]])
+        
+        return np.array(x), np.array(prob), np.array(channel_weights)
+        # channel_numbers = np.random.choice(self.channel_count, n_samples, p=self.channel_weights)
+        # print(channel_numbers)
+        # ps_points_return = np.zeros((n_samples, self.n_dims))
+        # for i,x in enumerate(channel_numbers):
+        #     if self.model[i] is None:
+        #         continue
+        #     ps_points = self.model[i].sample(n_samples, return_prob=False, numpy=True, only_sample=True)
+        #     ps_points_return[i] = ps_points
+        # return ps_points_return
+
+
     def train(self):
         self.model = []
         for i in tqdm(range(self.channel_count)):
@@ -496,6 +599,28 @@ class MultiChannelFlowSampler(FlowSampler):
             # logger.info(f"Training channel {i} of {channel_count}. # of points: {len(channel_phase_space[i])}, tot. cross section: {np.sum(channel_cross_sections[i]):.2e}")
             current_flow.train()
             current_flow.save()
+    def load(self, channel_weights):
+        self.model = []
+        self.channel_weights = channel_weights
+        for i in range(self.channel_count):
+            if channel_weights[i] == 0:
+                self.model.append(None)
+                continue
+            basepath = f"PythonSampler/{self.current_process_name}/{self.matrix_name}"
+            basepath = os.path.join(basepath, f"channel_{i}")
+
+            current_flow = SingleChannelFlowSampler(
+                self.integrand,
+                basepath,
+                self.n_dims,
+                self.channel_count,
+                channel_number=i,
+                current_process_name=self.current_process_name,
+                matrix_name=self.matrix_name
+            )
+            current_flow.load()
+            self.model.append(current_flow)
+
 
 
 

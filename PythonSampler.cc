@@ -23,6 +23,20 @@ PythonSampler::PythonSampler()
 PythonSampler::~PythonSampler() = default;
 
 double PythonSampler::generate() {
+    // pybind11::tuple result = sampling.attr("generate")(1);
+    // std::vector<double> p = result[0].cast<std::vector<double>>();
+    // double probability = result[1].cast<double>();
+    // double channelWeight = result[2].cast<double>();
+    // double w = eventHandler()->dSigDR(p) / nanobarn;
+    // lastPoint() = p;
+    // select(w);
+    // if(probability == 0.0 || w == 0.0 || channelWeight == 0.0) {
+    //     return 0;
+    // }
+    // w  = w*channelWeight/probability;
+    // if ( w != 0.0 )
+    //     accept();
+    // return w;
     py::tuple result = sampling.attr("generate")(1);
     double w = result[1].cast<double>();
     lastPoint() = result[0].cast<std::vector<double>>();
@@ -35,12 +49,26 @@ double PythonSampler::generate() {
 
 double PythonSampler::dSigDR(std::vector<double> p) {
     double w = eventHandler()->dSigDR(p) / nanobarn;
-    lastPoint() = p;
-    select(w);
-    if ( w != 0.0 )
-      accept();
+    // lastPoint() = p;
+    // select(w);
+    // if ( w != 0.0 )
+    //   accept();
     return w;
 }
+
+double PythonSampler::dSigDRRun(std::vector<double> p, double probability, double channelWeight) {
+    double w = eventHandler()->dSigDR(p) / nanobarn;
+    lastPoint() = p;
+    select(w);
+    if(probability == 0.0 || w == 0.0 || channelWeight == 0.0) {
+        return 0;
+    }
+    w  = w/probability;
+    if ( w != 0.0 )
+        accept();
+    return w;
+}
+
 
 
 std::vector<double> PythonSampler::dSigDRMatrix(const std::vector<std::vector<double>>& matrix) {
@@ -158,7 +186,7 @@ void PythonSampler::initialize(bool progress) {
     try{
        sampling = py::module_::import("sampling");
        if(initialized()){
-        py::object result = sampling.attr("load")(py::cast(this), nDims, matrixElemName, bin());
+        py::object result = sampling.attr("load")(py::cast(this), nDims, diagDim, matrixElemName, bin(), binCount);
        }
        else{
         py::object result = sampling.attr("train")(py::cast(this), nDims, diagDim, matrixElemName, bin(), binCount);
@@ -170,7 +198,6 @@ void PythonSampler::initialize(bool progress) {
       std::cout << "Failed to import sampling" << std::endl;
       std::cout << e.what() << std::endl;
     }
-    exit(0);
     isInitialized();
 }
 
@@ -179,6 +206,7 @@ PYBIND11_EMBEDDED_MODULE(herwig_python, m) {
         .def(py::init<>())
         .def("dimension", &PythonSampler::dimension)
         .def("dSigDR", &PythonSampler::dSigDR)
+        .def("dSigDRRun", &PythonSampler::dSigDRRun)
         .def("dSigDRMatrix", &PythonSampler::dSigDRMatrix);
   }
 

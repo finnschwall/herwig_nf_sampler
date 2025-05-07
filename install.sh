@@ -1,6 +1,8 @@
 #dependencies: list may not be complete
 #for building herwig
 #sudo apt-get install autoconf cmake
+#if on pc without root access (cluster?) you can build both on your own. Dont forget to then adjust LD_LIBRARY_PATH
+
 #for building python
 #zlib-devel bzip2-devel openssl-devel ncurses-devel sqlite-devel readline-devel tk-devel gdbm-devel libffi-devel xz-devel
 
@@ -54,18 +56,15 @@ pip3 install numpy tqdm matplotlib decouple scipy
 #check if torch.cuda is available
 cuda_available=\$(python3 -c "import torch; print(torch.cuda.is_available())")
 if [ "$cuda_available" != "True" ]; then
-  echo "Pytorch was installed without CUDA support. Check your CUDA installation. Without you will only be able to use this library for inference/running!"
-
+  echo "Pytorch was installed without CUDA support. Check your CUDA installation. Without you will only be able to use this library for inference!"
+fi
 
 #build herwig. See https://herwig.hepforge.org/tutorials/installation/bootstrap.html
 #lean back and enjoy. this may take a while
 #if on cluster crank up the -j
 python3 herwig-bootstrap.py --lite -j ${CORES} ${HERWIG_HOME}
 
-
-#NEXT
-#copy everything from repo into Sampling (override old files)
-cp -r GIT_REPO_DIR/* "$HERWIG_HOME/Herwig/src/Herwig-7.3.0/Sampling"
+cp -r $GIT_REPO_DIR/* "$HERWIG_HOME/Herwig/src/Herwig-7.3.0/Sampling"
 
 
 cd "$HERWIG_HOME/Herwig/src/Herwig-7.3.0/Sampling"
@@ -83,8 +82,12 @@ export PATH="$PYTHON_INSTALL/bin:\$PATH"
 export LD_LIBRARY_PATH="$PYTHON_INSTALL/lib:\$LD_LIBRARY_PATH"
 export PYTHONHOME="$PYTHON_INSTALL"
 export PYTHONPATH="$PYTHON_INSTALL/lib/python3.10"
-export LD_LIBRARY_PATH="$PYTHON_INSTALL/lib:\$LD_LIBRARY_PATH"
 source \$HERWIG_HOME/bin/activate
 EOL
 
 echo "Finished!"
+echo "To activate the environment, run:"
+echo "source $BASE_DIR/activate_herwig.sh"
+if [ "$cuda_available" != "True" ]; then
+    echo "REMINDER: Pytorch was installed without CUDA support. Check your CUDA installation. Without you will only be able to use this library for inference!"
+fi
