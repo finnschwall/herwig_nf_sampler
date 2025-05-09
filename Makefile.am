@@ -1,5 +1,5 @@
 # Define subdirectories
-SUBDIRS = CellGrids
+SUBDIRS = CellGrids DiagramSampler
 
 # Define the library to be built
 pkglib_LTLIBRARIES = HwSampling.la
@@ -37,6 +37,7 @@ HwSampling_la_SOURCES = \
 # Specify additional libraries to link against
 HwSampling_la_LIBADD = \
     CellGrids/libHwCellGrids.la \
+    DiagramSampler/libHwDiagramSampling.la \
     -lpython3.10
 
 # Specify the library paths for linking

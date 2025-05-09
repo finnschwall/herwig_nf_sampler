@@ -240,7 +240,6 @@ void BinSampler::saveIntegrationData() const {
 
   XML::Element stats = MultiIterationStatistics::toXML();
   stats.appendAttribute("process",id());
-
   sampler()->grids().append(stats);
 
 }
@@ -496,7 +495,6 @@ void BinSampler::finalize(bool){
 	b != RandomNumberHistograms.end(); ++b ) {
        b->second.first.dump(randomNumberString(), b->first.first,shortprocess(),b->first.second);
   }
-
 }
 
 

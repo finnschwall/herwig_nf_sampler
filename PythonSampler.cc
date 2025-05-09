@@ -10,10 +10,10 @@ using namespace std;
 #include <pybind11/embed.h>
 #include <pybind11/stl.h> 
 #include <typeinfo>
-#include "ThePEG/MatrixElement/MEBase.h"
-#include "Herwig/MatrixElement/Matchbox/Base/MatchboxMEBase.h"
-#include "ThePEG/Handlers/LuminosityFunction.h"
-#include "ThePEG/Utilities/SimplePhaseSpace.h"
+//#include "ThePEG/MatrixElement/MEBase.h"
+//#include "Herwig/MatrixElement/Matchbox/Base/MatchboxMEBase.h"
+//#include "ThePEG/Handlers/LuminosityFunction.h"
+//#include "ThePEG/Utilities/SimplePhaseSpace.h"
 namespace py = pybind11;
 
 PythonSampler::PythonSampler()
@@ -35,21 +35,16 @@ double PythonSampler::generate() {
     
     // Apply importance sampling similar to the original code
     if (!weighted() && initialized()) {
-        double p = min(abs(w), kappa() * 10.4) / (kappa() * 10.4);
+        double p = min(abs(w), kappa() * referenceWeight()) / (kappa() * referenceWeight());
         double sign = w >= 0. ? 1. : -1.;
         if (p < 1 && UseRandom::rnd() > p)
             w = 0.;
         else
-            w = sign * max(abs(w), 10.4 * kappa());
+            w = sign * max(abs(w), referenceWeight() * kappa());
     }
     
-    // Update the last point (you'll need to implement this)
     lastPoint() = psPoint;
-    
-    // Select this weight
     select(w);
-    
-    // Accept the point if weight is non-zero
     if (w != 0.0)
         accept();
         
@@ -169,14 +164,12 @@ void PythonSampler::initialize(bool progress) {
 
     auto matrixElem = xComb.matrixElement();
     auto matrixElemName = matrixElem->name();
-    // std::cout << "matrix element:" << matrixElem->name() << std::endl;
+    std::cout << "matrix element:" << matrixElem->name() << std::endl;
     int nDims2 = dimension();
     // std::cout << "nDims matrix element" << nDims2 << std::endl;
     int diagDim = xComb.diagrams().size();
-
-    cout << "WEIGHTED:" << weighted() << endl;
-    cout << "REFWEIGHT:" << referenceWeight() << endl;
-    cout << "KAPPA:" << kappa() << endl;
+    auto xc = handler->xCombs()[0];
+    auto channelSelectionDim = xc->partonDimensions().first;
     try{
 
         // auto xc = handler->xCombs()[0];
@@ -251,7 +244,7 @@ void PythonSampler::initialize(bool progress) {
     try{
        sampling = py::module_::import("sampling");
        if(initialized()){
-        py::object result = sampling.attr("load")(py::cast(this), nDims, diagDim, matrixElemName, bin(), binCount);
+        py::object result = sampling.attr("load")(py::cast(this), nDims, diagDim, matrixElemName, bin(), binCount, referenceWeight());
        }
        else{
         py::object result = sampling.attr("train")(py::cast(this), nDims, diagDim, matrixElemName, bin(), binCount);
@@ -263,9 +256,7 @@ void PythonSampler::initialize(bool progress) {
       std::cout << "Failed to import sampling" << std::endl;
       std::cout << e.what() << std::endl;
     }
-    cout << "INITIALPOINTS:" << 1000 << endl;
-    runIteration(10000,progress);
-    cout << "REFWEIGHT:" << referenceWeight() << endl;
+    runIteration(10000,true);
     isInitialized();
 }
 

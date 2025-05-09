@@ -107,7 +107,7 @@ else
 	esac
 fi
 
-cp -r $GIT_REPO_DIR/* "$HERWIG_HOME/src/Herwig-7.3.0/Sampling"
+cp -a $GIT_REPO_DIR/* "$HERWIG_HOME/src/Herwig-7.3.0/Sampling"
 
 
 MAKEFILE="$SAMPLING/Makefile.am"

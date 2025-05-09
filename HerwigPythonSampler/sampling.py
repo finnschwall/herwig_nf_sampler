@@ -1,7 +1,5 @@
 import json
 import sys
-
-
 # fix paths to libraries. issue with pybind I guess
 sys.path.insert(0, '/home/finn/.pyenv/versions/3.10.16/envs/madnis/lib/python3.10/site-packages')
 sys.path.append('/mnt/data-slow/herwig/python/madnis')
@@ -59,10 +57,12 @@ try:
 except FileNotFoundError:
     pass
 
-sampler = None
+samplers = {}
+reference_weights = {}
+current_active_matrix_element = ""
 
 def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count):
-    global sampler
+    global samplers, current_active_matrix_element, reference_weights
     if bin_number == 0:
         logger.info(f"Starting training for {bin_count} diagrams for process {current_process}")
         process_info["start_time"] = time.time()
@@ -70,65 +70,62 @@ def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_co
         process_info["n_channels"] = channel_count
         process_info["channels"] = {}
     logger.info(f"Learning diagram {bin_number} of {bin_count}: {matrix_name}, PS Dim: {n_dims}, Channels: {channel_count}")
-
+    current_active_matrix_element = matrix_name
     start_time = time.time()
-    ps_points = np.random.rand(int(settings.INITIAL_POINTS), n_dims)
-    # n_dims = n_dims -1 #remove channel selection dimension
-    cross_sections = python_sampler.dSigDRMatrix(ps_points)
-    
+    if not os.path.exists(f"PythonSampler/{current_process}/{matrix_name}/best_model.pth"):
+        ps_points = np.random.rand(int(settings.INITIAL_POINTS), n_dims)
+        cross_sections = python_sampler.dSigDRMatrix(ps_points)
+        reference_weights[matrix_name] = max(cross_sections)
+    else:
+        reference_weights[matrix_name] = 1.0
     ps_sampling_time = time.time() - start_time
 
     integrator = SingleChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}/{matrix_name}" ,n_dims, 1, matrix_name=matrix_name,
                                                 current_process_name =current_process, single_channel=True)
-    integrator.prepare_data(ps_points, cross_sections)
-    integrator.train(verbose=True)
-    integrator.save()
+    if os.path.exists(f"PythonSampler/{current_process}/{matrix_name}/best_model.pth"):
+        logger.info(f"Loading existing model for {matrix_name}")
+        integrator.load()
+        
+    else:
+        integrator.prepare_data(ps_points, cross_sections)
+        integrator.train(verbose=True)
+        integrator.save()
+        process_info[matrix_name] = integrator.meta
+        if bin_number == bin_count - 1:
+            process_info["end_time"] = time.time()
+            process_info["total_time"] = process_info["end_time"] - process_info["start_time"]
+            logger.info(f"Training finished for {bin_count} diagrams for process {current_process}")
+            logger.info(f"Total time: {process_info['total_time']:.2f} seconds")
+            # sum up total remaining channels
+            total_remaining_channels = 0
+            for matrix_name, matrix_info in process_info["channels"].items():
+                total_remaining_channels += matrix_info["remaining_channel_count"]
+            logger.info(f"Total trained flows: {total_remaining_channels}")
+        with open(f"PythonSampler/{current_process}/process_info.json", "w") as f: 
+            json.dump(process_info, f, indent=4)
 
-    process_info[matrix_name] = integrator.meta
-    if bin_number == bin_count - 1:
-        process_info["end_time"] = time.time()
-        process_info["total_time"] = process_info["end_time"] - process_info["start_time"]
-        logger.info(f"Training finished for {bin_count} diagrams for process {current_process}")
-        logger.info(f"Total time: {process_info['total_time']:.2f} seconds")
-        # sum up total remaining channels
-        total_remaining_channels = 0
-        for matrix_name, matrix_info in process_info["channels"].items():
-            total_remaining_channels += matrix_info["remaining_channel_count"]
-        logger.info(f"Total trained flows: {total_remaining_channels}")
-
-    with open(f"PythonSampler/{current_process}/process_info.json", "w") as f: 
-        json.dump(process_info, f, indent=4)
-    sampler = integrator
-    # try:
-    #     x, prob, func_vals = integrator.sample(10000, numpy=True)
-    #     # func_vals/=10
-    #     for i in range(len(x)):
-    #         python_sampler.dSigDRRun(x[i], prob[i], func_vals[i])
-    # except Exception as e:
-    #     traceback.print_exc()
-    #     raise e
     
-g_python_sampler = None
-def load(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count):
-    global sampler, g_python_sampler
-    g_python_sampler = python_sampler
+    samplers[matrix_name] = integrator
+
+    
+
+def load(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count, ref_weight):
+    global samplers, reference_weights, current_active_matrix_element
+    current_active_matrix_element = matrix_name
+    if matrix_name in samplers:
+        logger.info(f"Diagram {matrix_name} already loaded for process {current_process}")
+        return
+
+    reference_weights[matrix_name] = ref_weight
+    print(f"Loading diagram {matrix_name} for process {current_process}")
     try:
         integrator = SingleChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}/{matrix_name}" ,n_dims, 1, matrix_name=matrix_name,
                                                 current_process_name =current_process, single_channel=True)
         integrator.load()
-        sampler = integrator
+        samplers[matrix_name] = integrator
     except Exception as e:
         traceback.print_exc()
         raise e
-    # print(integrator.integrate(2000))
-    # print(integrator.integrate(2000))
-    # print(integrator.integrate(2000))
-    # from madnis.integrator import Integrator, Integrand
-    # integrand = Integrand(integrator.model[0].matrix_callback, input_dim=n_dims)
-    # mad_integ = Integrator(integrand, flow = integrator.model[0].model.to("cpu"))
-    # sampler = mad_integ
-    # result, error = mad_integ.integrate(100)
-    # print(f"Integration result: {result:.5f} +- {error:.5f}")
 
 
 
@@ -138,39 +135,47 @@ stored_func_vals = []
 max_weight = 0
 current_idx = 0
 def generate():
-    global sampler, stored_x, stored_prob, stored_func_vals, current_idx, max_weight
+    global samplers, stored_x, stored_prob, stored_func_vals, current_idx, max_weight, reference_weights, current_active_matrix_element
+    sampler = samplers[current_active_matrix_element]
+    reference_weight = reference_weights[current_active_matrix_element]
     if current_idx >= len(stored_x):
-        x, prob, func_vals = sampler.sample(2000, numpy=True)
+        n_cache = 50000
+        x, prob, func_vals = sampler.sample(n_cache, numpy=True)
         weights = func_vals / prob
-        max_weight = weights.max().item()
-        # unweighted_indices = []
-        # valid_indices = np.where(weights > 0)[0]
-        # if len(valid_indices) > 0:
-        #     for idx in valid_indices:
-        #         # Accept with probability proportional to weight / max_weight
-        #         if np.random.uniform(0, 1) < weights[idx] / max_weight:
-        #             unweighted_indices.append(idx)
-        # x = x[unweighted_indices]
-        # prob = prob[unweighted_indices]
-        # func_vals = func_vals[unweighted_indices]
+        import matplotlib.pyplot as plt
+        fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(20, 5 * 2))
+        axes = axes.flatten()
+        axes[0].hist(prob, bins=50)
+        axes[0].set_title("Probability distribution")
+        axes[1].hist(func_vals, bins=50)
+        axes[1].set_title("Function values distribution")
+        axes[2].hist(weights, bins=50)
+        axes[2].set_title("Weights distribution")
+        plt.savefig(sampler.basepath + "/weights.png")
+        plt.close(fig)
+
+        zero_func_vals = np.where(func_vals == 0)[0]
+        zero_weights = np.where(weights == 0)[0]
+        # max_weight = weights.max().item()
+        max_weight = reference_weight
+
+
+        nonzero_weights = weights[weights > 0]
+        unweighting_efficiency = weights.mean()/reference_weight*100
+
+        est_accepted_points = nonzero_weights.sum()/(reference_weight*0.5)/n_cache*100*(float(len(zero_func_vals))/n_cache)
+
+
         stored_x = x.tolist()
         stored_prob = prob.tolist()
         stored_func_vals = func_vals.tolist()
         current_idx = 0
-        estimated_integral = sampler._integrate(func_vals, prob, 2000)
-        logger.info(f"Sampling new points. Est. Integ.:{estimated_integral['integral']:.3f}, Max weight: {max_weight:.3f}")
+        estimated_integral = sampler._integrate(func_vals, prob, n_cache)
+        logger.info(f"Caching. Est. Integ.:{estimated_integral['integral']:.3f}+-{estimated_integral['error']:.5f}\n"
+                    f"Ref. weight: {max_weight:.3f}, Median {np.median(weights):.3f}, Mean: {np.mean(weights):.3f}\n"
+                    f"Zero: {float(len(zero_func_vals))/n_cache*100:.2f}%, Est. Acc: {est_accepted_points:.3f}%, Unweighting efficiency: {unweighting_efficiency:.3f}")
         
         
     ret_tuple = (stored_x[current_idx], stored_prob[current_idx], stored_func_vals[current_idx], max_weight)
     current_idx += 1
     return ret_tuple
-    
-    try:
-        x, prob, channel_weights = sampler.sample(1000)
-        for i in range(len(x)):
-            # print(f"Sampled point: {x[i]}, Probability: {prob[i]}, Channel weights: {channel_weights[i]}")
-            g_python_sampler.dSigDRRun(x[i], prob[i], channel_weights[i])
-    except Exception as e:
-        traceback.print_exc()
-        raise e
-    return sampler.sample(n_samples)

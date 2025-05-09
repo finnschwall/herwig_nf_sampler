@@ -121,50 +121,13 @@ class SingleChannelFlowSampler(FlowSampler):
         self.phase_space_points = phase_space_points
         self.cross_sections = cross_sections
 
-    # def sample(self, n_samples, return_prob=True, numpy=False, force_nonzero=True):
-    #     with torch.no_grad():
-    #             x, prob = self.model.sample(
-    #                     n_samples,
-    #                     return_prob=True,
-    #                     device=self.device
-    #                 )
-    #     func_vals = self.matrix_callback(x, self.channel_number)
-    #     zero_count = torch.sum(func_vals == 0).item()
-    #     if zero_count == n_samples:
-    #         raise ValueError("All function values from sampling are zero!") 
-    #     if return_prob:
-    #         if not numpy:
-    #             return x, prob, func_vals
-    #         else:
-    #             return x.cpu().numpy(), prob.cpu().numpy(), func_vals.cpu().numpy()
-    #     else:
-    #         if not numpy:
-    #             return x, func_vals
-    #         else:
-    #             return x.cpu().numpy(), func_vals.cpu().numpy()
-
     def sample(self, n_samples, return_prob=True, numpy=False, force_nonzero=False, max_attempts=5, only_sample=False):
-        """
-        Sample from the model and compute function values.
-        
-        Args:
-            n_samples: Number of samples to generate
-            return_prob: Whether to return probability values
-            numpy: Whether to convert tensors to numpy arrays
-            force_nonzero: If True, ensures all function values are non-zero
-            max_attempts: Maximum number of sampling attempts when force_nonzero is True
-            
-        Returns:
-            Samples and function values (and probabilities if return_prob is True)
-        """
         with torch.no_grad():
             x, prob = self.model.sample(
                 n_samples,
                 return_prob=True,
                 device=self.device
             )
-        #exponentiate prob
-        # prob = torch.exp(prob)
         if only_sample:
             if return_prob:
                 if not numpy:
@@ -175,30 +138,23 @@ class SingleChannelFlowSampler(FlowSampler):
                 return x
             else:
                 return x.cpu().numpy()
-        
         func_vals = self.matrix_callback(x, self.channel_number)
         zero_count = torch.sum(func_vals == 0).item()
-        
         if zero_count == n_samples:
             raise ValueError("All function values from sampling are zero!")
-        
         # Handle force_nonzero logic if needed
         if force_nonzero and zero_count > 0:
             # Get initial indices of non-zero values
             nonzero_mask = func_vals != 0
             nonzero_indices = torch.where(nonzero_mask)[0]
-            
             # Create final arrays with only non-zero elements initially
             final_x = x[nonzero_indices]
             final_prob = prob[nonzero_indices]
             final_func_vals = func_vals[nonzero_indices]
-            
             remaining_samples = n_samples - len(nonzero_indices)
             attempt = 0
-            
             while remaining_samples > 0 and attempt < max_attempts:
                 attempt += 1
-                
                 # Calculate how many additional samples to generate
                 # Use dynamic scaling based on observed zero ratio
                 zero_percent = zero_count / n_samples
@@ -208,10 +164,8 @@ class SingleChannelFlowSampler(FlowSampler):
                 else:
                     # Generate at least twice as many samples as needed, accounting for zero ratio
                     additional_samples = remaining_samples * int(1 / (1 - zero_percent)) * 2
-                
                 # Ensure we generate at least remaining_samples
                 additional_samples = max(remaining_samples, additional_samples)
-                
                 # Sample more points
                 with torch.no_grad():
                     new_x, new_prob = self.model.sample(
@@ -219,7 +173,6 @@ class SingleChannelFlowSampler(FlowSampler):
                         return_prob=True,
                         device=self.device
                     )
-                
                 new_func_vals = self.matrix_callback(new_x, self.channel_number)
                 new_nonzero_mask = new_func_vals != 0
                 new_nonzero_indices = torch.where(new_nonzero_mask)[0]
@@ -230,10 +183,8 @@ class SingleChannelFlowSampler(FlowSampler):
                     final_func_vals = torch.cat([final_func_vals, new_func_vals[new_nonzero_indices[:samples_to_take]]])
                     remaining_samples -= samples_to_take
                 zero_count = torch.sum(new_func_vals == 0).item()
-
             if remaining_samples > 0:
                 raise ValueError(f"Could not generate {n_samples} non-zero samples after {max_attempts} attempts")
-            
             # Ensure we have exactly n_samples
             if len(final_x) > n_samples:
                 final_x = final_x[:n_samples]
@@ -243,8 +194,6 @@ class SingleChannelFlowSampler(FlowSampler):
             prob = final_prob
             func_vals = final_func_vals
             self.actual_sample_size = len(final_x)+zero_count
-        
-        # Return results in requested format
         if return_prob:
             if not numpy:
                 return x, prob, func_vals
@@ -257,9 +206,13 @@ class SingleChannelFlowSampler(FlowSampler):
                 return x.cpu().numpy(), func_vals.cpu().numpy()
 
 
-    def train(self, batch_size: int = 1000, epochs = None, lr: float = 3e-4, verbose: bool = False) -> Tuple[Flow, float, List[float]]:
+    def train(self, batch_size = None, epochs = None, lr = None, verbose: bool = False) -> Tuple[Flow, float, List[float]]:
         if not epochs:
             epochs = settings.TRAINING_EPOCHS
+        if not batch_size:
+            batch_size = settings.BATCH_SIZE
+        if not lr:
+            lr = settings.LEARNING_RATE
         dataset = Dataset.PhaseSpaceDataset(self.phase_space_points, self.cross_sections, device=self.device)
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
