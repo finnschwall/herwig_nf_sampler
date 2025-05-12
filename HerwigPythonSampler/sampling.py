@@ -1,14 +1,14 @@
 import json
 import sys
 # fix paths to libraries. issue with pybind I guess
-sys.path.insert(0, '/home/finn/.pyenv/versions/3.10.16/envs/madnis/lib/python3.10/site-packages')
-sys.path.append('/mnt/data-slow/herwig/python/madnis')
+sys.path.insert(0, '/mnt/data-slow/Herwig/venv_herwig/lib/python3.10/site-packages')
+# sys.path.append('/mnt/data-slow/herwig/python/madnis')
 
 #import cpp module provided by pybind11
 import herwig_python
 
 import Dataset
-
+import matplotlib.pyplot as plt
 import time
 import numpy as np
 import os
@@ -142,49 +142,93 @@ stored_prob = []
 stored_func_vals = []
 max_weight = 0
 current_idx = 0
-def generate():
+def generate(n_cache):
     global samplers, stored_x, stored_prob, stored_func_vals, current_idx, max_weight, reference_weights, current_active_matrix_element, g_python_sampler
 
     sampler = samplers[current_active_matrix_element]
     reference_weight = reference_weights[current_active_matrix_element]
-    if current_idx >= len(stored_x):
-        n_cache = 50000
-        x, prob, func_vals = sampler.sample(n_cache, numpy=True)
-        weights = func_vals / prob
-        # import matplotlib.pyplot as plt
-        # fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(20, 5 * 2))
-        # axes = axes.flatten()
-        # axes[0].hist(prob, bins=50)
-        # axes[0].set_title("Probability distribution")
-        # axes[1].hist(func_vals, bins=50)
-        # axes[1].set_title("Function values distribution")
-        # axes[2].hist(weights, bins=50)
-        # axes[2].set_title("Weights distribution")
-        # plt.savefig(sampler.basepath + "/weights.png")
-        # plt.close(fig)
+    x, prob, func_vals = sampler.sample(n_cache, numpy=True)
 
-        zero_func_vals = np.where(func_vals == 0)[0]
-        zero_weights = np.where(weights == 0)[0]
-        # max_weight = weights.max().item()
-        max_weight = reference_weight
+    weights = func_vals / prob
+
+    zero_func_vals = np.where(func_vals == 0)[0]
+    zero_weights = np.where(weights == 0)[0]
+    # max_weight = weights.max().item()
+    max_weight = reference_weight
 
 
-        nonzero_weights = weights[weights > 0]
-        unweighting_efficiency = weights.mean()/reference_weight*100
+    nonzero_weights = weights[weights > 0]
+    unweighting_efficiency = weights.mean()/reference_weight*100
 
-        est_accepted_points = nonzero_weights.sum()/(reference_weight*0.5)/n_cache*100*(float(len(zero_func_vals))/n_cache)
+    est_accepted_points = nonzero_weights.sum()/(reference_weight*0.5)/n_cache*100*(float(len(zero_func_vals))/n_cache)
 
 
-        stored_x = x.tolist()
-        stored_prob = prob.tolist()
-        stored_func_vals = func_vals.tolist()
-        current_idx = 0
-        estimated_integral = sampler._integrate(func_vals, prob, n_cache)
-        logger.info(f"Caching. Est. Integ.:{estimated_integral['integral']:.3f}+-{estimated_integral['error']:.5f}\n"
-                    f"Ref. weight: {max_weight:.3f}, Median {np.median(weights):.3f}, Mean: {np.mean(weights):.3f}\n"
-                    f"Zero: {float(len(zero_func_vals))/n_cache*100:.2f}%, Est. Acc: {est_accepted_points:.3f}%, Unweighting efficiency: {unweighting_efficiency:.3f}")
+    stored_x = x.tolist()
+    stored_prob = prob.tolist()
+    stored_func_vals = func_vals.tolist()
+    current_idx = 0
+    estimated_integral = sampler._integrate(func_vals, prob, n_cache)
+    logger.info(f"Caching. Est. Integ.:{estimated_integral['integral']:.3f}+-{estimated_integral['error']:.5f}\n"
+                f"Ref. weight: {max_weight:.3f}, Median {np.median(weights):.3f}, Mean: {np.mean(weights):.3f}\n"
+                f"Zero: {float(len(zero_func_vals))/n_cache*100:.2f}%, Est. Acc: {est_accepted_points:.3f}%, Unweighting efficiency: {unweighting_efficiency:.3f}")
+        
+       
         
         
-    ret_tuple = (stored_x[current_idx], stored_prob[current_idx], stored_func_vals[current_idx], max_weight)
-    current_idx += 1
+    ret_tuple = (stored_x, stored_prob, stored_func_vals)
+    # current_idx += 1
     return ret_tuple
+
+
+
+# def generate():
+#     global samplers, stored_x, stored_prob, stored_func_vals, current_idx, max_weight, reference_weights, current_active_matrix_element, g_python_sampler
+
+#     sampler = samplers[current_active_matrix_element]
+#     reference_weight = reference_weights[current_active_matrix_element]
+
+#     # fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(20, 5 * 2))
+#     # axes = axes.flatten()
+#     # axes[0].set_title("NF Probability distribution")
+#     # axes[1].set_title("ME cross section distribution")
+#     # axes[2].set_title("Weights distribution")
+
+#     if current_idx >= len(stored_x):
+#         n_cache = 50000
+#         x, prob, func_vals = sampler.sample(n_cache, numpy=True)
+#         weights = func_vals / prob
+
+#         # axes[0].hist(prob, bins=50)
+#         # axes[1].hist(func_vals, bins=50)
+#         # axes[2].hist(weights, bins=50)
+#         # plt.savefig(sampler.basepath + "/weights.png")
+#         # plt.close(fig)
+
+
+#         zero_func_vals = np.where(func_vals == 0)[0]
+#         zero_weights = np.where(weights == 0)[0]
+#         # max_weight = weights.max().item()
+#         max_weight = reference_weight
+
+
+#         nonzero_weights = weights[weights > 0]
+#         unweighting_efficiency = weights.mean()/reference_weight*100
+
+#         est_accepted_points = nonzero_weights.sum()/(reference_weight*0.5)/n_cache*100*(float(len(zero_func_vals))/n_cache)
+
+
+#         stored_x = x.tolist()
+#         stored_prob = prob.tolist()
+#         stored_func_vals = func_vals.tolist()
+#         current_idx = 0
+#         estimated_integral = sampler._integrate(func_vals, prob, n_cache)
+#         logger.info(f"Caching. Est. Integ.:{estimated_integral['integral']:.3f}+-{estimated_integral['error']:.5f}\n"
+#                     f"Ref. weight: {max_weight:.3f}, Median {np.median(weights):.3f}, Mean: {np.mean(weights):.3f}\n"
+#                     f"Zero: {float(len(zero_func_vals))/n_cache*100:.2f}%, Est. Acc: {est_accepted_points:.3f}%, Unweighting efficiency: {unweighting_efficiency:.3f}")
+        
+        
+#     ret_tuple = (stored_x[current_idx], stored_prob[current_idx], stored_func_vals[current_idx], max_weight)
+#     current_idx += 1
+#     return ret_tuple
+
+

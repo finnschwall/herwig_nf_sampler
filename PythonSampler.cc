@@ -24,14 +24,43 @@ PythonSampler::~PythonSampler() = default;
 
 
 double PythonSampler::generate() {
-    pybind11::tuple result = sampling.attr("generate")();
-    std::vector<double> psPoint = result[0].cast<std::vector<double>>();  
-    double probability = result[1].cast<double>(); 
-    double funcValue = result[2].cast<double>();
+    if (cachedIndex >= nSamplesCache || cachedIndex == -1) {
+        try{
+            pybind11::tuple result = sampling.attr("generate")(nSamplesCache);
+            auto psPointsMatrix = result[0].cast<std::vector<std::vector<double>>>();
+            auto probabilities = result[1].cast<std::vector<double>>();
+            auto funcValues = result[2].cast<std::vector<double>>();
+    
+            for (size_t i = 0; i < nSamplesCache; ++i) {
+                // Use swap to avoid allocations where possible
+                if (cachedPsPoints[i].capacity() >= psPointsMatrix[i].size()) {
+                    cachedPsPoints[i].swap(psPointsMatrix[i]);
+                } else {
+                    cachedPsPoints[i] = std::move(psPointsMatrix[i]);
+                }
+                cachedProbabilities[i] = probabilities[i];
+                cachedFuncValues[i] = funcValues[i];
+            }
+            cout << "after copy" << endl;
+            
+            cachedIndex = 0;
+        }
+        catch(const std::exception& e)
+        {
+            std::cerr << e.what() << '\n';
+            exit(0);
+        }
+        
+    
+    }
+    
+    // Get the current sample
+    double probability = cachedProbabilities[cachedIndex];
+    double funcValue = cachedFuncValues[cachedIndex];
+    const auto& psPoint = cachedPsPoints[cachedIndex];
     
     double w = probability > 0 ? funcValue / probability : 0.0;
     
-
     if (!weighted() && initialized()) {
         double p = min(abs(w), kappa() * referenceWeight()) / (kappa() * referenceWeight());
         double sign = w >= 0. ? 1. : -1.;
@@ -45,11 +74,39 @@ double PythonSampler::generate() {
     select(w);
     if (w != 0.0)
         accept();
-        
+    cachedIndex++;
+    
     assert(kappa() == 1. || sampler()->almostUnweighted());
-    // std::cout << "w:" << w << " kappa:" << kappa() << " ref:" << referenceWeight() << std::endl;
     return w;
 }
+
+
+// double PythonSampler::generate() {
+//     pybind11::tuple result = sampling.attr("generate")();
+//     std::vector<double> psPoint = result[0].cast<std::vector<double>>();  
+//     double probability = result[1].cast<double>(); 
+//     double funcValue = result[2].cast<double>();
+    
+//     double w = probability > 0 ? funcValue / probability : 0.0;
+    
+
+//     if (!weighted() && initialized()) {
+//         double p = min(abs(w), kappa() * referenceWeight()) / (kappa() * referenceWeight());
+//         double sign = w >= 0. ? 1. : -1.;
+//         if (p < 1 && UseRandom::rnd() > p)
+//             w = 0.;
+//         else
+//             w = sign * max(abs(w), referenceWeight() * kappa());
+//     }
+    
+//     lastPoint() = psPoint;
+//     select(w);
+//     if (w != 0.0)
+//         accept();
+        
+//     assert(kappa() == 1. || sampler()->almostUnweighted());
+//     return w;
+// }
 
 
 // double PythonSampler::generate() {
@@ -117,6 +174,9 @@ std::vector<double> PythonSampler::dSigDRMatrix(const std::vector<std::vector<do
   
 
 void PythonSampler::initialize(bool progress) {
+    cachedPsPoints.resize(nSamplesCache);
+    cachedProbabilities.resize(nSamplesCache);
+    cachedFuncValues.resize(nSamplesCache);
 
 
     const StandardEventHandler* handler = eventHandler();
@@ -251,6 +311,7 @@ void PythonSampler::finalize(bool) {
         cout << "final integrated cross section is ( "
         << integratedXSec()/nanobarn << " +/- "
         << integratedXSecErr()/nanobarn << " ) nb\n" << endl;
+        sampling.attr("finalize")();
         // std::cout << "Python Sampler finalize" << std::endl;
         // py::finalize_interpreter();
     }

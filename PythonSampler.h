@@ -43,6 +43,12 @@ namespace Herwig {
     private:
         py::module_ sampling;
         bool interpreterInitialized = false;
+        size_t nSamplesCache = 100000;
+        size_t cachedIndex = -1;
+
+        std::vector<std::vector<double>> cachedPsPoints;
+        std::vector<double> cachedProbabilities;
+        std::vector<double> cachedFuncValues;
     public:
         // std::unique_ptr<py::scoped_interpreter> guard;
         

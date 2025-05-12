@@ -5,7 +5,6 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from datetime import datetime
-from madnis.nn import Flow
 
 
 class PhaseSpaceDataset(Dataset):

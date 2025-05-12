@@ -64,7 +64,7 @@ if [ ! "$python_exists" = "true" ]; then
 	pip3 install --upgrade pip
 	pip3 install cython pybind11 torch torchtestcase
 	#install python packages that are needed later (but should not cause any issues)
-	pip3 install numpy tqdm matplotlib decouple scipy
+	pip3 install numpy tqdm matplotlib python-decouple scipy
 else
     echo "Assuming pip packages are already installed as python was already built"
 fi
