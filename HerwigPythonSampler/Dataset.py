@@ -21,6 +21,8 @@ class PhaseSpaceDataset(Dataset):
             device (str): Device to store tensors on ("cuda" or "cpu")
         """
         self.device = device
+        # self.max_cross_section = cross_sections.max()
+        # cross_sections = cross_sections / self.max_cross_section
         self.phase_space = torch.tensor(phase_space_points, dtype=torch.float32).to(device)
         self.cross_sections = torch.tensor(cross_sections, dtype=torch.float32).to(device)
         self.weights = self.cross_sections / self.cross_sections.sum()
@@ -31,6 +33,24 @@ class PhaseSpaceDataset(Dataset):
     
     def __getitem__(self, idx):
         return self.phase_space[idx], self.weights[idx]
+    
+class PhaseSpaceChannelDataset(Dataset):    
+    def __init__(self, phase_space_points, cross_sections, channel_numbers, channel_weights, device="cuda"):
+        self.device = device
+        # self.max_cross_section = cross_sections.max()
+        # cross_sections = cross_sections / self.max_cross_section
+        self.phase_space = torch.tensor(phase_space_points, dtype=torch.float32).to(device)
+        self.cross_sections = torch.tensor(cross_sections, dtype=torch.float32).to(device)
+        self.weights = self.cross_sections / self.cross_sections.sum()
+        self.total_cross_section = self.cross_sections.sum()
+        self.channel_numbers = torch.tensor(channel_numbers, dtype=torch.float32).to(device)
+        self.channel_weights = torch.tensor(channel_weights, dtype=torch.float32).to(device)
+        
+    def __len__(self):
+        return len(self.phase_space)
+    
+    def __getitem__(self, idx):
+        return self.phase_space[idx], self.weights[idx], self.channel_numbers[idx], self.channel_weights[idx]
 
 
 class ChannelDataPreprocessor:
@@ -57,27 +77,17 @@ class ChannelDataPreprocessor:
         Returns:
             tuple: Lists of phase space points and cross sections for each channel
         """
-        # Extract the channel information
         channels = phase_space_points[:, channel_selection_dim]
-        # Remove the channel column from phase space points
         phase_space_points = np.delete(phase_space_points, channel_selection_dim, axis=1)
-        
-        # Scale and convert to integer channel indices
         channels = channels * self.n_channels
         channels = channels.astype(int)
-        
-        # Initialize lists to hold data for each channel
         channel_phase_space = [[] for _ in range(self.n_channels)]
         channel_cross_sections = [[] for _ in range(self.n_channels)]
-        
-        # Split data by channel
         for i, point in enumerate(phase_space_points):
             channel = channels[i]
-            if 0 <= channel < self.n_channels:  # Ensure valid channel index
+            if 0 <= channel < self.n_channels:
                 channel_phase_space[channel].append(point)
                 channel_cross_sections[channel].append(cross_sections[i])
-        
-        # Convert lists to numpy arrays
         channel_phase_space = [np.array(points) for points in channel_phase_space]
         channel_cross_sections = [np.array(xs) for xs in channel_cross_sections]
         return channel_phase_space, channel_cross_sections

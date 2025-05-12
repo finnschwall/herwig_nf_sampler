@@ -13,20 +13,25 @@ from scipy.optimize import curve_fit
 
 from nn import Flow
 import Dataset
-from AbstractSampler import AbstractSampler
 import settings
 
 import logging
 logger = logging.getLogger('main')
 
-# new abstract class to unify all flow based samplers
+
+
 class FlowSampler:
     def __init__(self, cpp_integrand, basepath, n_dims,
                  channel_count, single_channel=True, channel_number=None,
-                 current_process_name="UNKNOWN", matrix_name="UNKNOWN"):
+                 current_process_name="UNKNOWN", matrix_name="UNKNOWN",
+                 channel_selection_dim=None):
         self.basepath = basepath
-        self.n_dims = n_dims
-        self.channel_selection_dim = settings.CHANNEL_SELECTION_DIM
+        #one dim is channel selection dim
+        if single_channel:
+            self.n_dims = n_dims
+        else:
+            self.n_dims = n_dims - 1
+        self.channel_selection_dim = channel_selection_dim
         self.channel_count = channel_count
         self.single_channel = single_channel
         self.integrand = cpp_integrand
@@ -41,99 +46,232 @@ class FlowSampler:
         self.current_process_name = current_process_name
         self.matrix_name = matrix_name
 
-        self.phase_space_points = None
-        self.cross_sections = None
+        self.dataset = None
         self.model = None
         self.channel_weights = None
 
         self.meta = {}
     
     def matrix_callback(self, x, channel=None):
-        # if channel is None:
-        #     channel = torch.zeros((x.shape[0],))
-        # else:
-        #     if isinstance(channel, torch.Tensor):
-        #         channel = channel.float()/ self.channel_count
-        #     elif isinstance(channel, int):
-        #         channel_tensor_size = (x.shape[0],)
-        #         channel = torch.full(channel_tensor_size, channel / self.channel_count)
-        #     else:
-        #         raise ValueError("Channel must be a tensor or an integer.")
         x=x.to("cpu")
-        # x = torch.cat((x[:, :self.channel_selection_dim], channel.unsqueeze(1), x[:, self.channel_selection_dim:]), dim=1)
-        matrix_list = x.tolist()
-        result = self.integrand(matrix_list)
-        result_tensor = torch.tensor(result)
-        return result_tensor
+        if self.single_channel:
+            matrix_list = x.tolist()
+            result = self.integrand(matrix_list)
+            result_tensor = torch.tensor(result)
+            return result_tensor
+        else:
+            if channel is None:
+                channel = torch.zeros((x.shape[0],))
+            else:
+                if isinstance(channel, torch.Tensor):
+                    channel = channel.float()/ self.channel_count
+                elif isinstance(channel, int):
+                    channel_tensor_size = (x.shape[0],)
+                    channel = torch.full(channel_tensor_size, channel / self.channel_count)
+                else:
+                    raise ValueError("Channel must be a tensor or an integer.")
+            x = torch.cat((x[:, :self.channel_selection_dim], channel.unsqueeze(1), x[:, self.channel_selection_dim:]), dim=1)
+            matrix_list = x.tolist()
+            result = self.integrand(matrix_list)
+            result_tensor = torch.tensor(result)
+            return result_tensor
+        
     
-    def plot_integration_metrics(self, img_name="integration_metrics.png"):
-        total_elems = len(self.integ_metrics.keys())
-        fig, axes = plt.subplots(nrows=(total_elems+1)//2, ncols=2, figsize=(20, 5 *2))
-        axes = axes.flatten()
-        for i , key in enumerate(self.integ_metrics.keys()):
-            axes[i].plot(self.integ_metrics[key], label=key, marker="o")
-            axes[i].set_xlabel('Training Iteration')
-            axes[i].set_ylabel(key)
-            axes[i].legend()
-        # for j in range(self.n_dims, len(axes)):
-        #     fig.delaxes(axes[j])
-        fig.tight_layout()  # Adjust layout to prevent overlap
-        plt.savefig(self.basepath+"/"+img_name)
-        plt.close()
-
-
-    def plot_dims(self, n_points=None, file_name="phase_space_distrib.png"):
-        n_rows = (self.n_dims + 3) // 4
-        fig, axes = plt.subplots(nrows=n_rows, ncols=4, figsize=(20, 5 * n_rows))
-        axes = axes.flatten()
-        if n_points is None:
-            n_points = len(self.cross_sections)
-        samples = self.sample(n_points, return_prob=False, numpy=True)[0]
-        for dim in range(self.n_dims):
-            ax = axes[dim]
-            bins = np.linspace(-5, 4, 50)
-            ax.hist(self.phase_space_points[:,dim],weights=self.cross_sections, histtype="step", label="training data", bins=50, density=True)
-            # ax.hist(x[:,dim],weights=y, histtype="step", label="training data", bins=50, density=True)
-            ax.hist(samples[:,dim],  histtype="step", label="generated", bins=50, density=True)
-            ax.set_title(f'Dimension {dim}')
-            ax.legend()
-        for j in range(self.n_dims, len(axes)):
-            fig.delaxes(axes[j])
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
-        plt.savefig(self.basepath+"/"+file_name)
-        plt.close()
-
-    @abstractmethod
-    def save(self):
-        pass
-
-    @abstractmethod
-    def sample(self, n_samples, return_prob=False, numpy=False):
-        # needs to return 
-        pass
-
-    @abstractmethod
     def prepare_data(self, phase_space_points, cross_sections):
-        pass
+        if self.single_channel:
+            cross_sections = cross_sections / np.sum(cross_sections)
+            self.dataset = Dataset.PhaseSpaceDataset(phase_space_points, cross_sections, device=self.device)
+        else:
+            preprocessor = Dataset.ChannelDataPreprocessor(self.channel_count)
+            tot_cross_section = np.sum(cross_sections)
+            phase_space_points, cross_sections = preprocessor.split_by_channel(
+                phase_space_points,
+                cross_sections,
+                channel_selection_dim=self.channel_selection_dim
+            )            
+            tot_cross_section_per_channel = np.array([np.sum(i) for i in cross_sections])
+            self.channel_weights = tot_cross_section_per_channel / tot_cross_section
 
-class SingleChannelFlowSampler(FlowSampler):
-    def prepare_data(self, phase_space_points, cross_sections):
-        self.phase_space_points = phase_space_points
-        self.cross_sections = cross_sections
+            channel_num_arrs = []
+            for i in range(self.channel_count):
+                channel_number = (i+0.5) / self.channel_count
+                channel_num_arr = np.full((cross_sections[i].shape[0],), channel_number)
+                channel_num_arrs.append(channel_num_arr)
+            combined_cross_section = np.concatenate(cross_sections)
+            combined_phase_space = np.concatenate(phase_space_points)
+            channel_numbers = np.concatenate(channel_num_arrs)
+            channel_weights = np.concatenate([np.full((cross_sections[i].shape[0],), self.channel_weights[i]) for i in range(self.channel_count)])
+            self.dataset = Dataset.PhaseSpaceChannelDataset(combined_phase_space, combined_cross_section, channel_numbers, channel_weights, device=self.device)
+            logger.info(f"Channel weights: {self.channel_weights}")
+            expected_weight = 1 / self.channel_count
+            print(f"Expected weight: {expected_weight}")
 
-    def sample(self, n_samples, return_prob=True, numpy=False, force_nonzero=False, max_attempts=5, only_sample=False):
+            # drop_threshold = float(settings.CHANNEL_DROP_THRESHOLD)*expected_weight
+            # if np.sum(channel_weights > drop_threshold) > 0:
+            #     dropped_weights = channel_weights[channel_weights < drop_threshold]
+            #     logger.info(f"Dropping channels {np.where(channel_weights < drop_threshold)[0]} with weight < {max(dropped_weights):.4f} (Exp. Weight: {expected_weight:.4f})")
+            #     #recalculate to make sure weights sum to 1
+            #     tot_cross_section_per_channel = np.where(channel_weights > drop_threshold, tot_cross_section_per_channel, 0)
+            #     total_cross_section = np.sum(tot_cross_section_per_channel)
+            #     channel_weights = tot_cross_section_per_channel / total_cross_section
+            #     logger.info(f"New channel weights: {channel_weights}")
+
+
+    def train(self, batch_size = None, epochs = None, lr = None, verbose: bool = False) -> Tuple[Flow, float, List[float]]:
+        if not epochs:
+            epochs = settings.TRAINING_EPOCHS
+        if not batch_size:
+            batch_size = settings.BATCH_SIZE
+        if not lr:
+            lr = settings.LEARNING_RATE
+        
+        
+
+        if self.single_channel:
+            flow = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
+            flow_best = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
+            
+        else:
+            flow = Flow(dims_in=self.n_dims, uniform_latent=True, dims_c=1).to(self.device)
+            flow_best = Flow(dims_in=self.n_dims, uniform_latent=True, dims_c=1).to(self.device)
+        
+        self.model = flow
+        loader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
+        self.plot_dims(file_name="phase_space_distrib_before_training.png")
+        
+        best_loss = float('inf')
+        tot_losses = []
+        
+        flow.eval()
         with torch.no_grad():
-            x, prob = self.model.sample(
-                n_samples,
-                return_prob=True,
-                device=self.device
-            )
+            untrained_losses = []
+            if self.single_channel:
+                for phase_space, weight in loader:
+                    log_prob = flow.log_prob(phase_space)
+                    weighted_loss = -(log_prob * weight).mean()
+                    untrained_losses.append(weighted_loss.item())
+            else:
+                for phase_space, weight, channel_number, channel_weight in loader:
+                    channel_number = channel_number.unsqueeze(1)
+                    log_prob = flow.log_prob(phase_space, c=channel_number)
+                    weighted_loss = -(log_prob * weight*channel_weight).mean()
+                    untrained_losses.append(weighted_loss.item())
+            untrained_loss = sum(untrained_losses) / len(untrained_losses)
+            tot_losses.append(untrained_loss)
+            if verbose:
+                print(f"Untrained model loss: {untrained_loss}")
+
+        optimizer = torch.optim.Adam(flow.parameters(), lr=lr)
+        progress_bar = tqdm(range(epochs), desc="Training", unit="epoch", disable=not verbose)
+
+        self.model = flow_best
+
+        if settings.COLLECT_TRAINING_INTEGRATION_METRICS:
+            self.integ_metrics = {
+                "effective_sample_sizes": [self.integrate(1000)["effective_sample_size"]],
+                "unweighting_efficiencies": [self.integrate(1000)["unweighting_efficiency"]],
+                "variance_50_samples": [self.repeat_integrate(50)["error"]],
+                "variance_100_samples": [self.repeat_integrate(100)["error"]],
+                "variance_1000_samples": [self.integrate(1000)["error"]],
+                "zero_count" : [self.integrate(1000)["zero_count"]]
+            }
+            self.plot_integral(close_plot=False, label="Untrained model 1", save=False)
+            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
+            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
+            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
+            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
+            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
+            self.plot_integral(close_plot=True, label="Untrained model 2", file_name="integral_convergence_before_training.png", save=True)
+
+        for epoch in progress_bar:
+            flow.train()
+            epoch_losses = []
+            if self.single_channel:
+                for phase_space, weight in loader:
+                    optimizer.zero_grad()
+                    log_prob = flow.log_prob(phase_space)
+                    weighted_loss = -(log_prob * weight).mean()
+                    weighted_loss.backward()
+                    optimizer.step()
+                    epoch_losses.append(weighted_loss.item())
+            else:
+                for phase_space, weight, channel_number, channel_weight in loader:
+                    optimizer.zero_grad()
+                    channel_number = channel_number.unsqueeze(1)
+                    log_prob = flow.log_prob(phase_space, c=channel_number)
+                    weighted_loss = -(log_prob * weight* channel_weight).mean()
+                    weighted_loss.backward()
+                    optimizer.step()
+                    epoch_losses.append(weighted_loss.item())
+            
+            epoch_loss = sum(epoch_losses) / len(epoch_losses)
+            tot_losses.append(epoch_loss)
+            if verbose:
+                progress_bar.set_postfix(loss=f"{epoch_loss:.3e}")
+            if epoch_loss < best_loss:
+                best_loss = epoch_loss
+                flow_best.load_state_dict(flow.state_dict())
+                self.model = flow_best
+            if settings.COLLECT_TRAINING_INTEGRATION_METRICS:
+                res_1000 = self.repeat_integrate(1000, 3)
+                self.integ_metrics["effective_sample_sizes"].append(res_1000["effective_sample_size"])
+                self.integ_metrics["unweighting_efficiencies"].append(res_1000["unweighting_efficiency"])
+                self.integ_metrics["zero_count"].append(res_1000["zero_count"])
+                self.integ_metrics["variance_1000_samples"].append(res_1000["error"])
+                self.integ_metrics["variance_50_samples"].append(self.repeat_integrate(50)["error"])
+                self.integ_metrics["variance_100_samples"].append(self.repeat_integrate(100)["error"])
+        self.model = flow_best
+        self.losses = tot_losses
+
+        if settings.COLLECT_TRAINING_INTEGRATION_METRICS:
+            self.plot_integral(label="Trained model 1", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 2", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
+            self.plot_integral(label="Trained model 4", close_plot=True, save=True)
+            self.plot_integration_metrics()
+        
+        self.plot_dims()
+        
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.losses)
+        plt.title(f"Training Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.grid(True)
+        plot_path = os.path.join(self.basepath, "loss_plot.png")
+        plt.savefig(plot_path)
+        plt.close()
+
+    def sample(self, n_samples, return_prob=True, numpy=False, force_nonzero=False, max_attempts=5, only_sample=False, c=None):
+        with torch.no_grad():
+            if self.single_channel:
+                x, prob, latent = self.model.sample(
+                    n_samples,
+                    return_prob=True,
+                    return_latent=True,
+                    device=self.device
+                )
+            else:
+                if c is None:
+                    raise ValueError("Channel number must be provided for multi-channel sampling.")
+                if isinstance(c, float):
+                    c = torch.full((n_samples,), c).to(self.device).unsqueeze(1)
+                x, prob = self.model.sample(
+                    n_samples,
+                    return_prob=True,
+                    c=c,
+                    device=self.device
+                )
         if only_sample:
             if return_prob:
                 if not numpy:
                     return x, prob
                 else:
-                    return x.cpu().numpy(), prob.cpu().numpy()
+                    return x.cpu().numpy(), prob.cpu().numpy()#, latent.cpu().numpy()
             if not numpy:
                 return x
             else:
@@ -204,115 +342,6 @@ class SingleChannelFlowSampler(FlowSampler):
                 return x, func_vals
             else:
                 return x.cpu().numpy(), func_vals.cpu().numpy()
-
-
-    def train(self, batch_size = None, epochs = None, lr = None, verbose: bool = False) -> Tuple[Flow, float, List[float]]:
-        if not epochs:
-            epochs = settings.TRAINING_EPOCHS
-        if not batch_size:
-            batch_size = settings.BATCH_SIZE
-        if not lr:
-            lr = settings.LEARNING_RATE
-        dataset = Dataset.PhaseSpaceDataset(self.phase_space_points, self.cross_sections, device=self.device)
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-        flow = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
-        flow_best = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
-        
-        best_loss = float('inf')
-        tot_losses = []
-        
-        flow.eval()
-        with torch.no_grad():
-            untrained_losses = []
-            for phase_space, weight in loader:
-                log_prob = flow.log_prob(phase_space)
-                weighted_loss = -(log_prob * weight).mean()
-                untrained_losses.append(weighted_loss.item())
-            untrained_loss = sum(untrained_losses) / len(untrained_losses)
-            tot_losses.append(untrained_loss)
-            if verbose:
-                print(f"Untrained model loss: {untrained_loss}")
-
-        optimizer = torch.optim.Adam(flow.parameters(), lr=lr)
-        progress_bar = tqdm(range(epochs), desc="Training", unit="epoch", disable=not verbose)
-
-        self.model = flow_best
-
-        if settings.COLLECT_TRAINING_INTEGRATION_METRICS:
-            self.integ_metrics = {
-                "effective_sample_sizes": [self.integrate(1000)["effective_sample_size"]],
-                "unweighting_efficiencies": [self.integrate(1000)["unweighting_efficiency"]],
-                "variance_50_samples": [self.repeat_integrate(50)["error"]],
-                "variance_100_samples": [self.repeat_integrate(100)["error"]],
-                "variance_1000_samples": [self.integrate(1000)["error"]],
-                "zero_count" : [self.integrate(1000)["zero_count"]]
-            }
-            self.plot_integral(close_plot=False, label="Untrained model 1", save=False)
-            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-            self.plot_integral(close_plot=True, label="Untrained model 2", file_name="integral_convergence_before_training.png", save=True)
-
-        for epoch in progress_bar:
-            flow.train()
-            epoch_losses = []
-            for phase_space, weight in loader:
-                optimizer.zero_grad()
-                log_prob = flow.log_prob(phase_space)
-                weighted_loss = -(log_prob * weight).mean()
-                weighted_loss.backward()
-                optimizer.step()
-                epoch_losses.append(weighted_loss.item())
-            
-            epoch_loss = sum(epoch_losses) / len(epoch_losses)
-            tot_losses.append(epoch_loss)
-            if verbose:
-                progress_bar.set_postfix(loss=f"{epoch_loss:.3e}")
-            if epoch_loss < best_loss:
-                best_loss = epoch_loss
-                flow_best.load_state_dict(flow.state_dict())
-                self.model = flow_best
-            if settings.COLLECT_TRAINING_INTEGRATION_METRICS:
-                res_1000 = self.repeat_integrate(1000, 3)
-                self.integ_metrics["effective_sample_sizes"].append(res_1000["effective_sample_size"])
-                self.integ_metrics["unweighting_efficiencies"].append(res_1000["unweighting_efficiency"])
-                self.integ_metrics["zero_count"].append(res_1000["zero_count"])
-                self.integ_metrics["variance_1000_samples"].append(res_1000["error"])
-
-                self.integ_metrics["variance_50_samples"].append(self.repeat_integrate(50)["error"])
-                self.integ_metrics["variance_100_samples"].append(self.repeat_integrate(100)["error"])
-            
-            # if epoch % 5 == 0:
-            #     self.model = flow_best
-            #     self.plot_integral(file_name=f"integral_convergence_epoch_{epoch}.png")
-        self.model = flow_best
-        self.losses = tot_losses
-
-        if settings.COLLECT_TRAINING_INTEGRATION_METRICS:
-            self.plot_integral(label="Trained model 1", close_plot=False, save=False)
-            self.plot_integral(label="Trained model 2", close_plot=False, save=False)
-            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
-            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
-            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
-            self.plot_integral(label="Trained model 3", close_plot=False, save=False)
-            self.plot_integral(label="Trained model 4", close_plot=True, save=True)
-            self.plot_integration_metrics()
-        
-        self.plot_dims()
-        
-
-        plt.figure(figsize=(10, 6))
-        plt.plot(self.losses)
-        plt.title(f"Training Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.grid(True)
-        plot_path = os.path.join(self.basepath, "loss_plot.png")
-        plt.savefig(plot_path)
-        plt.close()
 
     def _integrate(self, func_vals, prob, sample_size):
         assert sample_size != 0, "Sample size cannot be zero"
@@ -406,5 +435,57 @@ class SingleChannelFlowSampler(FlowSampler):
         if path is None:
             path = os.path.join(self.basepath, "best_model.pth")
         self.model.load_state_dict(torch.load(path))
+
+
+    def plot_integration_metrics(self, img_name="integration_metrics.png"):
+        total_elems = len(self.integ_metrics.keys())
+        fig, axes = plt.subplots(nrows=(total_elems+1)//2, ncols=2, figsize=(20, 5 *2))
+        axes = axes.flatten()
+        for i , key in enumerate(self.integ_metrics.keys()):
+            axes[i].plot(self.integ_metrics[key], label=key, marker="o")
+            axes[i].set_xlabel('Training Iteration')
+            axes[i].set_ylabel(key)
+            axes[i].legend()
+        # for j in range(self.n_dims, len(axes)):
+        #     fig.delaxes(axes[j])
+        fig.tight_layout()  # Adjust layout to prevent overlap
+        plt.savefig(self.basepath+"/"+img_name)
+        plt.close()
+
+    def _plot_dims(self,cross_sections,phase_space_points, n_points=None, c=None, file_name="phase_space_distrib.png"):
+        if n_points is None:
+            n_points = len(cross_sections)
+        samples, prob = self.sample(n_points, c=c, return_prob=True, numpy=True, only_sample=True)
+
+        n_rows = (self.n_dims + 3) // 4
+        fig, axes = plt.subplots(nrows=n_rows, ncols=4, figsize=(20, 5 * n_rows))
+        axes = axes.flatten()
+        
+        for dim in range(self.n_dims):
+            ax = axes[dim]
+            ax.hist(phase_space_points[:,dim],weights=cross_sections, histtype="step", label="training data", bins=50, density=True)
+            ax.hist(samples[:,dim],  histtype="step", label="generated", bins=50, density=True)
+            # ax.hist(latent[:,dim],weights=prob ,histtype="step", label="generated", bins=50)
+            ax.set_title(f'Dimension {dim}')
+            ax.legend()
+        for j in range(self.n_dims, len(axes)):
+            fig.delaxes(axes[j])
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        plt.savefig(self.basepath+"/"+file_name)
+        plt.close()
+
+    def plot_dims(self, n_points=None, file_name="phase_space_distrib.png"):
+        if self.single_channel:
+            phase_space_points = self.dataset.phase_space.cpu().numpy()
+            cross_sections = self.dataset.cross_sections.cpu().numpy()
+            self._plot_dims(cross_sections, phase_space_points, n_points=n_points, file_name=file_name)
+        else:
+            os.makedirs(self.basepath+"/channel_plots", exist_ok=True)
+            for i in range(self.channel_count):
+                channel_number = (i+0.5) / self.channel_count
+                phase_space_points = self.dataset.phase_space[self.dataset.channel_numbers == channel_number].cpu().numpy()
+                cross_sections = self.dataset.cross_sections[self.dataset.channel_numbers == channel_number].cpu().numpy()
+                self._plot_dims(cross_sections, phase_space_points, n_points=n_points, c=channel_number,file_name=f"/channel_plots/channel_{i}_{file_name}")
+        
 
 

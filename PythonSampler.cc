@@ -24,16 +24,14 @@ PythonSampler::~PythonSampler() = default;
 
 
 double PythonSampler::generate() {
-    // Get point, probability, and function value from your NF
     pybind11::tuple result = sampling.attr("generate")();
-    std::vector<double> psPoint = result[0].cast<std::vector<double>>();  // The sampled point
-    double probability = result[1].cast<double>();                       // PDF at the point
-    double funcValue = result[2].cast<double>();                         // Function value at the point
+    std::vector<double> psPoint = result[0].cast<std::vector<double>>();  
+    double probability = result[1].cast<double>(); 
+    double funcValue = result[2].cast<double>();
     
-    // Calculate the weight (func_val / prob)
     double w = probability > 0 ? funcValue / probability : 0.0;
     
-    // Apply importance sampling similar to the original code
+
     if (!weighted() && initialized()) {
         double p = min(abs(w), kappa() * referenceWeight()) / (kappa() * referenceWeight());
         double sign = w >= 0. ? 1. : -1.;
@@ -53,29 +51,6 @@ double PythonSampler::generate() {
     return w;
 }
 
-// double PythonSampler::generate(){
-//     pybind11::tuple result = sampling.attr("generate")();
-//     std::vector<double> p = result[0].cast<std::vector<double>>();
-//     double probability = result[1].cast<double>();
-//     double w = result[2].cast<double>()/probability;
-//     // double maxWeight = result[3].cast<double>();
-
-//     double rand = UseRandom::rnd();
-//     if (rand < w / referenceWeight()) {
-//         // Accept the event
-//         lastPoint() = p;
-//         w=referenceWeight();
-//     } else {
-//         select(0.0);
-//         return 0.0;
-//     }
-   
-//     select(w);
-//     if ( w != 0.0 )
-//       accept();
-//     assert(kappa()==1.||sampler()->almostUnweighted());
-//     return w;
-// }
 
 // double PythonSampler::generate() {
 //     pybind11::tuple result = sampling.attr("generate")();
@@ -244,10 +219,10 @@ void PythonSampler::initialize(bool progress) {
     try{
        sampling = py::module_::import("sampling");
        if(initialized()){
-        py::object result = sampling.attr("load")(py::cast(this), nDims, diagDim, matrixElemName, bin(), binCount, referenceWeight());
+        py::object result = sampling.attr("load")(py::cast(this), nDims, diagDim, matrixElemName, bin(), binCount, channelSelectionDim, referenceWeight());
        }
        else{
-        py::object result = sampling.attr("train")(py::cast(this), nDims, diagDim, matrixElemName, bin(), binCount);
+        py::object result = sampling.attr("train")(py::cast(this), nDims, diagDim, matrixElemName, bin(), binCount, channelSelectionDim);
        }
       
     //   std::cout << "Returned float from sampling.py: " << result.cast<double>() << std::endl;

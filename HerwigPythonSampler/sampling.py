@@ -17,7 +17,7 @@ import re
 import logging
 from tqdm import tqdm
 import settings
-from FlowSampler import SingleChannelFlowSampler
+from FlowSampler import FlowSampler
 import traceback
 
 in_files = glob.glob('*.in')
@@ -60,9 +60,11 @@ except FileNotFoundError:
 samplers = {}
 reference_weights = {}
 current_active_matrix_element = ""
+g_python_sampler = None
 
-def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count):
-    global samplers, current_active_matrix_element, reference_weights
+def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count, channel_selection_dim):
+    global samplers, current_active_matrix_element, reference_weights, g_python_sampler
+    g_python_sampler = python_sampler
     if bin_number == 0:
         logger.info(f"Starting training for {bin_count} diagrams for process {current_process}")
         process_info["start_time"] = time.time()
@@ -72,7 +74,9 @@ def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_co
     logger.info(f"Learning diagram {bin_number} of {bin_count}: {matrix_name}, PS Dim: {n_dims}, Channels: {channel_count}")
     current_active_matrix_element = matrix_name
     start_time = time.time()
-    if not os.path.exists(f"PythonSampler/{current_process}/{matrix_name}/best_model.pth"):
+
+    do_train = not os.path.exists(f"PythonSampler/{current_process}/{matrix_name}/best_model.pth") or settings.ALWAYS_RETRAIN
+    if do_train:
         ps_points = np.random.rand(int(settings.INITIAL_POINTS), n_dims)
         cross_sections = python_sampler.dSigDRMatrix(ps_points)
         reference_weights[matrix_name] = max(cross_sections)
@@ -80,11 +84,13 @@ def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_co
         reference_weights[matrix_name] = 1.0
     ps_sampling_time = time.time() - start_time
 
-    integrator = SingleChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}/{matrix_name}" ,n_dims, 1, matrix_name=matrix_name,
-                                                current_process_name =current_process, single_channel=True)
-    if os.path.exists(f"PythonSampler/{current_process}/{matrix_name}/best_model.pth"):
+    integrator = FlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}/{matrix_name}" ,n_dims, channel_count, matrix_name=matrix_name,
+                                                current_process_name =current_process, single_channel=not settings.SPLIT_BY_CHANNELS
+                                                ,channel_selection_dim=channel_selection_dim)
+    if not do_train:
         logger.info(f"Loading existing model for {matrix_name}")
         integrator.load()
+        
         
     else:
         integrator.prepare_data(ps_points, cross_sections)
@@ -109,8 +115,9 @@ def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_co
 
     
 
-def load(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count, ref_weight):
-    global samplers, reference_weights, current_active_matrix_element
+def load(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count, channel_selection_dim, ref_weight):
+    global samplers, reference_weights, current_active_matrix_element, g_python_sampler
+    g_python_sampler = python_sampler
     current_active_matrix_element = matrix_name
     if matrix_name in samplers:
         logger.info(f"Diagram {matrix_name} already loaded for process {current_process}")
@@ -119,8 +126,9 @@ def load(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_cou
     reference_weights[matrix_name] = ref_weight
     print(f"Loading diagram {matrix_name} for process {current_process}")
     try:
-        integrator = SingleChannelFlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}/{matrix_name}" ,n_dims, 1, matrix_name=matrix_name,
-                                                current_process_name =current_process, single_channel=True)
+        integrator = FlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}/{matrix_name}" ,n_dims, channel_count, matrix_name=matrix_name,
+                                                current_process_name =current_process, single_channel=not settings.SPLIT_BY_CHANNELS,
+                                                channel_selection_dim=channel_selection_dim)
         integrator.load()
         samplers[matrix_name] = integrator
     except Exception as e:
@@ -135,24 +143,25 @@ stored_func_vals = []
 max_weight = 0
 current_idx = 0
 def generate():
-    global samplers, stored_x, stored_prob, stored_func_vals, current_idx, max_weight, reference_weights, current_active_matrix_element
+    global samplers, stored_x, stored_prob, stored_func_vals, current_idx, max_weight, reference_weights, current_active_matrix_element, g_python_sampler
+
     sampler = samplers[current_active_matrix_element]
     reference_weight = reference_weights[current_active_matrix_element]
     if current_idx >= len(stored_x):
         n_cache = 50000
         x, prob, func_vals = sampler.sample(n_cache, numpy=True)
         weights = func_vals / prob
-        import matplotlib.pyplot as plt
-        fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(20, 5 * 2))
-        axes = axes.flatten()
-        axes[0].hist(prob, bins=50)
-        axes[0].set_title("Probability distribution")
-        axes[1].hist(func_vals, bins=50)
-        axes[1].set_title("Function values distribution")
-        axes[2].hist(weights, bins=50)
-        axes[2].set_title("Weights distribution")
-        plt.savefig(sampler.basepath + "/weights.png")
-        plt.close(fig)
+        # import matplotlib.pyplot as plt
+        # fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(20, 5 * 2))
+        # axes = axes.flatten()
+        # axes[0].hist(prob, bins=50)
+        # axes[0].set_title("Probability distribution")
+        # axes[1].hist(func_vals, bins=50)
+        # axes[1].set_title("Function values distribution")
+        # axes[2].hist(weights, bins=50)
+        # axes[2].set_title("Weights distribution")
+        # plt.savefig(sampler.basepath + "/weights.png")
+        # plt.close(fig)
 
         zero_func_vals = np.where(func_vals == 0)[0]
         zero_weights = np.where(weights == 0)[0]
