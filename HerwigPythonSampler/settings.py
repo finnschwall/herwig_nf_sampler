@@ -6,17 +6,17 @@ if os.path.exists('config.ini'):
 else:
     from decouple import config
 
-INITIAL_POINTS = config('INITIAL_POINTS', default=150000, cast=int)
-TRAINING_EPOCHS = config('TRAINING_EPOCHS', default=13, cast=int)
+INITIAL_POINTS = config('INITIAL_POINTS', default=1500000, cast=int)
+TRAINING_EPOCHS = config('TRAINING_EPOCHS', default=8, cast=int)
 
 BATCH_SIZE = config('BATCH_SIZE', default=16384, cast=int)
 
 LEARNING_RATE = config('LEARNING_RATE', default=6e-4, cast=float)#default=3e-4)
 
-ALWAYS_RETRAIN = config('ALWAYS_RETRAIN', default=True, cast=bool)
+ALWAYS_RETRAIN = config('ALWAYS_RETRAIN', default=False, cast=bool)
 """If True, retrain the model even if it already exists. This is useful for debugging purposes."""
 
-SPLIT_BY_CHANNELS = config('SPLIT_BY_CHANNELS', default=False, cast=bool)
+SPLIT_BY_CHANNELS = config('SPLIT_BY_CHANNELS', default=True, cast=bool)
 
 BACKEND = config('BACKEND', default='madnis')
 
@@ -33,3 +33,4 @@ COLLECT_TRAINING_INTEGRATION_METRICS = config('COLLECT_TRAINING_INTEGRATION_METR
     Use only for debugging purposes.
 """
 
+LIVE_TRAINING_PLOT = config('LIVE_TRAINING_PLOT', default=True, cast=bool)

@@ -45,6 +45,7 @@ namespace Herwig {
         bool interpreterInitialized = false;
         size_t nSamplesCache = 100000;
         size_t cachedIndex = -1;
+        size_t maxCachedIndex = 0;
 
         std::vector<std::vector<double>> cachedPsPoints;
         std::vector<double> cachedProbabilities;

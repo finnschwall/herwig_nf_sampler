@@ -39,7 +39,8 @@
 
 #include <cstdlib>
 #include <sstream> 
-
+#include <ctime>
+#include <iomanip>
 #include <regex>
 #include <dirent.h>
 #include <sys/stat.h> // For mkdir
@@ -100,6 +101,23 @@ GeneralSampler::GeneralSampler()
         file.close();
     }
     timeStart = std::chrono::high_resolution_clock::now();
+
+    string weightfileName = "runstats/"+current_process+"/" + "data" + ".csv";
+
+    std::ifstream infile(weightfileName.c_str());
+    bool exists = infile.good();
+    infile.close();
+
+    if (exists) {
+        if (std::remove(weightfileName.c_str()) != 0) {
+            std::cerr << "Error deleting file!" << std::endl;
+        }
+    }
+    weightFile = new ofstream(weightfileName.c_str(), std::ios::app);
+    // weightFile << std::setprecision(10) << std::fixed;
+
+    // weightFile->open(weightfileName, std::ios::app);
+
   }
 
 GeneralSampler::~GeneralSampler() {}
@@ -403,8 +421,11 @@ double GeneralSampler::generate() {
         // The lastSampler was picked according to the bias of the process.
         --excptTries;
       }
+      
       if ( weight != 0.0 )
+      // double newWeight = lastSampler()->generate();
         weight *= lastSampler()->generate()/lastSampler()->referenceWeight();
+      *weightFile << weight << std::endl;
     } catch(BinSampler::NextIteration) {
       updateSamplers();
       lastSampler(samplers().upper_bound(UseRandom::rnd())->second);
@@ -446,6 +467,8 @@ double GeneralSampler::generate() {
     break;
 
   }
+
+  // *weightFile << weight << std::endl;
 
   theAccepts += 1;
 
@@ -753,6 +776,9 @@ generator()->log() <<"This corresponds to a cross section difference between:\n"
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - timeStart);
 
+    std::time_t now = std::time(nullptr);
+    char timestamp[20];
+    std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
 
     mkdir("runstats", 0777);
     mkdir(("runstats/"+current_process).c_str(), 0777);
@@ -762,6 +788,7 @@ generator()->log() <<"This corresponds to a cross section difference between:\n"
     statistics.open(fileName, std::ios::app);
 
     statistics << "{\n"
+    << "  \"Timestamp\": \"" << timestamp << "\",\n"
     << "  \"ReferenceWeight\": " << theMaxWeight << ",\n"
     << "  \"CrossSectionCombined\": " << (integratedXSec()/nanobarn) << ",\n"
     << "  \"CrossSectionCombinedError\": " << (integratedXSecErr()/nanobarn) << ",\n"
@@ -771,24 +798,20 @@ generator()->log() <<"This corresponds to a cross section difference between:\n"
     << "  \"PointsAccepted\": " << theAccepts << ",\n"
     << "  \"PercentAccepted\": " << (double)theAccepts*100/(double)theAttempts << ",\n"
     << "  \"SumWeights\": " << theSumWeights*theMaxWeight << ",\n"
-    << "  \"SumWeights2\": " << theSumWeights2*sqr(theMaxWeight) << "\n"
-    << "  \"TimeElapsedMS\": " << duration.count() << ",\n"
+    << "  \"SumWeights2\": " << theSumWeights2*sqr(theMaxWeight) << ",\n"
+    << "  \"TimeElapsedMS\": " << duration.count() << "\n"
     << "}" << endl;
 
-    // statistics << "ReferenceWeight: " << theMaxWeight << "\n"
-    // "CrossSectionCombined "
-    // << (integratedXSec()/nanobarn) << " +/- "
-    // << (integratedXSecErr()/nanobarn) << "\n"
-    // << "CrossSectionRun "
-    // << runXSec << " +/- " << sqrt(runXSecErr) << "\n"
-    // << "PointsAttempted " << theAttempts << "\n"
-    // << "PointsAccepted " << theAccepts << "\n"
-    // << "% Accepted " << (double)theAccepts*100/(double)theAttempts << "\n"
-    // << "SumWeights " << theSumWeights*theMaxWeight << "\n"
-    // << "SumWeights2 " << theSumWeights2*sqr(theMaxWeight) << "\n"
-    // << endl;
+    cout << "Short stats:\n"
+    << "  ReferenceWeight: " << theMaxWeight << "\n"
+    << "  CrossSectionCombined: " << (integratedXSec()/nanobarn) << " +/- "
+    << (integratedXSecErr()/nanobarn) << "\n"
+    << "  CrossSectionRun: " << runXSec << " +/- " << sqrt(runXSecErr) << "\n"
+    << "  PointsAttempted/Accepted: " << theAttempts << "/" << theAccepts << " = " << (double)theAccepts*100/(double)theAttempts << "%" << endl;
+
 
     statistics.close();
+    weightFile->close();
 
   SamplerBase::dofinish();
 

@@ -20,19 +20,34 @@ PythonSampler::PythonSampler()
     : BinSampler() {
 }
 
-PythonSampler::~PythonSampler() = default;
+// PythonSampler::~PythonSampler() = default;
+
+PythonSampler::~PythonSampler(){
+    if(initialized()){
+        sampling.attr("finalize")();
+    }
+    // try{
+    //     sampling.attr("finalize")();
+    // }
+    // catch(const std::exception& e)
+    // {
+    //     std::cerr << e.what() << '\n';
+    // }
+}
 
 
 double PythonSampler::generate() {
-    if (cachedIndex >= nSamplesCache || cachedIndex == -1) {
+    if (cachedIndex >= maxCachedIndex || cachedIndex == -1) {
         try{
             pybind11::tuple result = sampling.attr("generate")(nSamplesCache);
             auto psPointsMatrix = result[0].cast<std::vector<std::vector<double>>>();
             auto probabilities = result[1].cast<std::vector<double>>();
             auto funcValues = result[2].cast<std::vector<double>>();
+            auto nSamples = result[3].cast<int>();
+
+            maxCachedIndex = nSamples;
     
-            for (size_t i = 0; i < nSamplesCache; ++i) {
-                // Use swap to avoid allocations where possible
+            for (size_t i = 0; i < nSamples; ++i) {
                 if (cachedPsPoints[i].capacity() >= psPointsMatrix[i].size()) {
                     cachedPsPoints[i].swap(psPointsMatrix[i]);
                 } else {
@@ -40,9 +55,7 @@ double PythonSampler::generate() {
                 }
                 cachedProbabilities[i] = probabilities[i];
                 cachedFuncValues[i] = funcValues[i];
-            }
-            cout << "after copy" << endl;
-            
+            }            
             cachedIndex = 0;
         }
         catch(const std::exception& e)
@@ -81,66 +94,9 @@ double PythonSampler::generate() {
 }
 
 
-// double PythonSampler::generate() {
-//     pybind11::tuple result = sampling.attr("generate")();
-//     std::vector<double> psPoint = result[0].cast<std::vector<double>>();  
-//     double probability = result[1].cast<double>(); 
-//     double funcValue = result[2].cast<double>();
-    
-//     double w = probability > 0 ? funcValue / probability : 0.0;
-    
-
-//     if (!weighted() && initialized()) {
-//         double p = min(abs(w), kappa() * referenceWeight()) / (kappa() * referenceWeight());
-//         double sign = w >= 0. ? 1. : -1.;
-//         if (p < 1 && UseRandom::rnd() > p)
-//             w = 0.;
-//         else
-//             w = sign * max(abs(w), referenceWeight() * kappa());
-//     }
-    
-//     lastPoint() = psPoint;
-//     select(w);
-//     if (w != 0.0)
-//         accept();
-        
-//     assert(kappa() == 1. || sampler()->almostUnweighted());
-//     return w;
-// }
-
-
-// double PythonSampler::generate() {
-//     pybind11::tuple result = sampling.attr("generate")();
-//     std::vector<double> p = result[0].cast<std::vector<double>>();
-//     double probability = result[1].cast<double>();
-//     double w = result[2].cast<double>();
-//     // double w = eventHandler()->dSigDR(p) / nanobarn;
-//     lastPoint() = p;
-//     select(w);
-//     if(probability == 0.0 || w == 0.0) {
-//         return 0;
-//     }
-//     w  = w/probability;
-//     if ( w != 0.0 )
-//         accept();
-
-//     return w;
-//     // py::tuple result = sampling.attr("generate")(1);
-//     // double w = result[1].cast<double>();
-//     // lastPoint() = result[0].cast<std::vector<double>>();
-    
-//     // select(w);
-//     // if ( w != 0.0 )
-//     //   accept();
-//     // return w;
-// }
 
 double PythonSampler::dSigDR(std::vector<double> p) {
     double w = eventHandler()->dSigDR(p) / nanobarn;
-    // lastPoint() = p;
-    // select(w);
-    // if ( w != 0.0 )
-    //   accept();
     return w;
 }
 
@@ -205,68 +161,7 @@ void PythonSampler::initialize(bool progress) {
     int diagDim = xComb.diagrams().size();
     auto xc = handler->xCombs()[0];
     auto channelSelectionDim = xc->partonDimensions().first;
-    try{
 
-        // auto xc = handler->xCombs()[0];
-        // cout << "dia dim:"<< xc->diagrams().size() << endl;
-
-        // vector<double> vec = {0.001, 10.1212, 0.1515};//, 0.0344, 0.6610, 0.8498};//, 0.3029};
-        // double w =0;
-        // w = eventHandler()->dSigDR(vec) / nanobarn;
-        // MatchboxMEBase* matchboxME = dynamic_cast<MatchboxMEBase*>(matrixElem.operator->());
-        // cout << "havex1x2:" << matchboxME->haveX1X2() << endl; 
-
-
-        // auto phasespace = matchboxME->phasespace();
-        // phasespace->generateKinematics(&vec[0], xc->meMomenta());
-
-        // cout << "PS gen dim for 2 outgoing: " << phasespace->nDimPhasespace(2) << endl;
-        // cout << "wantCMS: " << phasespace->wantCMS() << endl;
-        
-
-        // auto meMomenta = xc->meMomenta();
-
-        // cout << "meMomenta:" << meMomenta.size() << endl;
-
-
-        // pair<double, double> ll(0.0, 0.0);
-        // const LuminosityFunction &lumi = handler->lumiFn();
-        // Energy2 maxS = sqr(lumi.maximumCMEnergy())/exp(ll.first + ll.second);
-        // PPair inc = make_pair(handler->incoming().first->produceParticle(),
-		// 	handler->incoming().second->produceParticle());
-        // SimplePhaseSpace::CMS(inc, maxS);
-        // xc->prepare(inc);
-
-        // w = xc->dSigDR(ll, 7,&vec[0])/ nanobarn;;
-        // cout << "wXcomb" << w << endl;
-
-   
-        // auto temp = xc->meMomenta();
-        // cout << "temp" << temp.size() << endl;
-
-
-        // const vector<double> r = {};
-        // double jac = 1.0;
-        // const LuminosityFunction &lumi = handler->lumiFn();
-        // auto res = lumi.generateLL(&r[0], jac);
-
-        // cout << res.first <<"," << res.second << endl;
-
-        // auto maxS = sqr(lumi.maximumCMEnergy());
-
-        // cout << lumi.maximumCMEnergy()/GeV << endl;
-
-        // cout << "binDim" << handler->nDim(0) << endl;
-
-        // pair<double, double> ll(0.0, 0.0);
-        // double *vec = new double[7];
-        // auto cr = eventHandler()->dSigDR(ll, maxS, 0, 7, vec);
-
-    }
-    catch(const std::exception& e)
-    {
-        std::cerr << e.what() << '\n';
-    }
     try{
         py::initialize_interpreter();
     }
@@ -291,7 +186,8 @@ void PythonSampler::initialize(bool progress) {
       std::cout << "Failed to import sampling" << std::endl;
       std::cout << e.what() << std::endl;
     }
-    runIteration(10000,true);
+    // runIteration(initialPoints(),progress);
+    runIteration(10000,false);
     isInitialized();
 }
 

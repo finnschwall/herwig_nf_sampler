@@ -16,7 +16,7 @@ import glob
 import re
 import logging
 from tqdm import tqdm
-import settings
+import settings, Sampler
 from FlowSampler import FlowSampler
 import traceback
 
@@ -57,129 +57,52 @@ try:
 except FileNotFoundError:
     pass
 
-samplers = {}
-reference_weights = {}
-current_active_matrix_element = ""
-g_python_sampler = None
+sampler = None
 
 def train(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count, channel_selection_dim):
-    global samplers, current_active_matrix_element, reference_weights, g_python_sampler
-    g_python_sampler = python_sampler
-    if bin_number == 0:
-        logger.info(f"Starting training for {bin_count} diagrams for process {current_process}")
-        process_info["start_time"] = time.time()
-        process_info["bin_count"] = bin_count
-        process_info["n_channels"] = channel_count
-        process_info["channels"] = {}
-    logger.info(f"Learning diagram {bin_number} of {bin_count}: {matrix_name}, PS Dim: {n_dims}, Channels: {channel_count}")
-    current_active_matrix_element = matrix_name
-    start_time = time.time()
-
-    do_train = not os.path.exists(f"PythonSampler/{current_process}/{matrix_name}/best_model.pth") or settings.ALWAYS_RETRAIN
-    if do_train:
-        ps_points = np.random.rand(int(settings.INITIAL_POINTS), n_dims)
-        cross_sections = python_sampler.dSigDRMatrix(ps_points)
-        reference_weights[matrix_name] = max(cross_sections)
-    else:
-        reference_weights[matrix_name] = 1.0
-    ps_sampling_time = time.time() - start_time
-
-    integrator = FlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}/{matrix_name}" ,n_dims, channel_count, matrix_name=matrix_name,
-                                                current_process_name =current_process, single_channel=not settings.SPLIT_BY_CHANNELS
-                                                ,channel_selection_dim=channel_selection_dim)
-    if not do_train:
-        logger.info(f"Loading existing model for {matrix_name}")
-        integrator.load()
-        
-        
-    else:
-        integrator.prepare_data(ps_points, cross_sections)
-        integrator.train(verbose=True)
-        integrator.save()
-        process_info[matrix_name] = integrator.meta
-        if bin_number == bin_count - 1:
-            process_info["end_time"] = time.time()
-            process_info["total_time"] = process_info["end_time"] - process_info["start_time"]
-            logger.info(f"Training finished for {bin_count} diagrams for process {current_process}")
-            logger.info(f"Total time: {process_info['total_time']:.2f} seconds")
-            # sum up total remaining channels
-            total_remaining_channels = 0
-            for matrix_name, matrix_info in process_info["channels"].items():
-                total_remaining_channels += matrix_info["remaining_channel_count"]
-            logger.info(f"Total trained flows: {total_remaining_channels}")
-        with open(f"PythonSampler/{current_process}/process_info.json", "w") as f: 
-            json.dump(process_info, f, indent=4)
-
-    
-    samplers[matrix_name] = integrator
+    global sampler
+    try:
+        if sampler is None:
+            sampler = Sampler.Sampler(python_sampler, n_dims, channel_count, bin_count, channel_selection_dim, current_process)
+        sampler.train(bin_number, matrix_name)
+    except Exception as e:
+        # traceback.print_exc()
+        raise e
 
     
 
 def load(python_sampler, n_dims, channel_count, matrix_name, bin_number, bin_count, channel_selection_dim, ref_weight):
-    global samplers, reference_weights, current_active_matrix_element, g_python_sampler
-    g_python_sampler = python_sampler
-    current_active_matrix_element = matrix_name
-    if matrix_name in samplers:
-        logger.info(f"Diagram {matrix_name} already loaded for process {current_process}")
-        return
-
-    reference_weights[matrix_name] = ref_weight
-    print(f"Loading diagram {matrix_name} for process {current_process}")
+    global sampler
     try:
-        integrator = FlowSampler(python_sampler.dSigDRMatrix,f"PythonSampler/{current_process}/{matrix_name}" ,n_dims, channel_count, matrix_name=matrix_name,
-                                                current_process_name =current_process, single_channel=not settings.SPLIT_BY_CHANNELS,
-                                                channel_selection_dim=channel_selection_dim)
-        integrator.load()
-        samplers[matrix_name] = integrator
+        if sampler is None:
+            sampler = Sampler.Sampler(python_sampler, n_dims, channel_count, bin_count, channel_selection_dim, current_process)
+        sampler.load(matrix_name, ref_weight)
     except Exception as e:
-        traceback.print_exc()
+        # traceback.print_exc()
         raise e
 
 
 
-stored_x = []
-stored_prob = []
-stored_func_vals = []
-max_weight = 0
-current_idx = 0
 def generate(n_cache):
-    global samplers, stored_x, stored_prob, stored_func_vals, current_idx, max_weight, reference_weights, current_active_matrix_element, g_python_sampler
-
-    sampler = samplers[current_active_matrix_element]
-    reference_weight = reference_weights[current_active_matrix_element]
-    x, prob, func_vals = sampler.sample(n_cache, numpy=True)
-
-    weights = func_vals / prob
-
-    zero_func_vals = np.where(func_vals == 0)[0]
-    zero_weights = np.where(weights == 0)[0]
-    # max_weight = weights.max().item()
-    max_weight = reference_weight
+    global sampler
+    try:
+        if sampler is None:
+            raise ValueError("Sampler not initialized?!")
+        return sampler.generate(n_cache)
+    except Exception as e:
+        # traceback.print_exc()
+        raise e
 
 
-    nonzero_weights = weights[weights > 0]
-    unweighting_efficiency = weights.mean()/reference_weight*100
-
-    est_accepted_points = nonzero_weights.sum()/(reference_weight*0.5)/n_cache*100*(float(len(zero_func_vals))/n_cache)
-
-
-    stored_x = x.tolist()
-    stored_prob = prob.tolist()
-    stored_func_vals = func_vals.tolist()
-    current_idx = 0
-    estimated_integral = sampler._integrate(func_vals, prob, n_cache)
-    logger.info(f"Caching. Est. Integ.:{estimated_integral['integral']:.3f}+-{estimated_integral['error']:.5f}\n"
-                f"Ref. weight: {max_weight:.3f}, Median {np.median(weights):.3f}, Mean: {np.mean(weights):.3f}\n"
-                f"Zero: {float(len(zero_func_vals))/n_cache*100:.2f}%, Est. Acc: {est_accepted_points:.3f}%, Unweighting efficiency: {unweighting_efficiency:.3f}")
-        
-       
-        
-        
-    ret_tuple = (stored_x, stored_prob, stored_func_vals)
-    # current_idx += 1
-    return ret_tuple
-
-
+def finalize():
+    global sampler
+    try:
+        if sampler is None:
+            raise ValueError("Sampler not initialized?!")
+        sampler.finalize()
+    except Exception as e:
+        # traceback.print_exc()
+        raise e
 
 # def generate():
 #     global samplers, stored_x, stored_prob, stored_func_vals, current_idx, max_weight, reference_weights, current_active_matrix_element, g_python_sampler

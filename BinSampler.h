@@ -427,6 +427,7 @@ protected:
   virtual IBPtr fullclone() const;
   //@}
 
+  double theReferenceWeight;
 
 // If needed, insert declarations of virtual function defined in the
 // InterfacedBase class here (using ThePEG-interfaced-decl in Emacs).
@@ -481,7 +482,7 @@ private:
   /**
    * The reference weight to be used
    */
-  double theReferenceWeight;
+  // double theReferenceWeight;
 
   /**
    * The bin to be sampled.

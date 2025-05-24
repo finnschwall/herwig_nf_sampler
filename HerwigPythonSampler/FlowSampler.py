@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from datetime import datetime
 from tqdm import tqdm
 from typing import List, Dict, Any, Tuple, Optional
+import json
 
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
@@ -50,7 +51,6 @@ class FlowSampler:
         self.model = None
         self.channel_weights = None
 
-        self.meta = {}
     
     def matrix_callback(self, x, channel=None):
         x=x.to("cpu")
@@ -90,7 +90,22 @@ class FlowSampler:
                 channel_selection_dim=self.channel_selection_dim
             )            
             tot_cross_section_per_channel = np.array([np.sum(i) for i in cross_sections])
-            self.channel_weights = tot_cross_section_per_channel / tot_cross_section
+            channel_weights = tot_cross_section_per_channel / tot_cross_section
+
+            expected_weight = 1 / self.channel_count
+            print(f"Expected weight: {expected_weight}")
+
+            drop_threshold = float(settings.CHANNEL_DROP_THRESHOLD)*expected_weight
+            if np.sum(channel_weights > drop_threshold) > 0:
+                dropped_weights = channel_weights[channel_weights < drop_threshold]
+                logger.info(f"Dropping channels {np.where(channel_weights < drop_threshold)[0]} with weight < {max(dropped_weights):.4f} (Exp. Weight: {expected_weight:.4f})")
+                #recalculate to make sure weights sum to 1
+                tot_cross_section_per_channel = np.where(channel_weights > drop_threshold, tot_cross_section_per_channel, 0)
+                total_cross_section = np.sum(tot_cross_section_per_channel)
+                channel_weights = tot_cross_section_per_channel / total_cross_section
+                logger.info(f"New channel weights: {channel_weights}")
+
+            self.channel_weights = channel_weights
 
             channel_num_arrs = []
             for i in range(self.channel_count):
@@ -101,20 +116,13 @@ class FlowSampler:
             combined_phase_space = np.concatenate(phase_space_points)
             channel_numbers = np.concatenate(channel_num_arrs)
             channel_weights = np.concatenate([np.full((cross_sections[i].shape[0],), self.channel_weights[i]) for i in range(self.channel_count)])
+            
+        
             self.dataset = Dataset.PhaseSpaceChannelDataset(combined_phase_space, combined_cross_section, channel_numbers, channel_weights, device=self.device)
             logger.info(f"Channel weights: {self.channel_weights}")
-            expected_weight = 1 / self.channel_count
-            print(f"Expected weight: {expected_weight}")
+            
 
-            # drop_threshold = float(settings.CHANNEL_DROP_THRESHOLD)*expected_weight
-            # if np.sum(channel_weights > drop_threshold) > 0:
-            #     dropped_weights = channel_weights[channel_weights < drop_threshold]
-            #     logger.info(f"Dropping channels {np.where(channel_weights < drop_threshold)[0]} with weight < {max(dropped_weights):.4f} (Exp. Weight: {expected_weight:.4f})")
-            #     #recalculate to make sure weights sum to 1
-            #     tot_cross_section_per_channel = np.where(channel_weights > drop_threshold, tot_cross_section_per_channel, 0)
-            #     total_cross_section = np.sum(tot_cross_section_per_channel)
-            #     channel_weights = tot_cross_section_per_channel / total_cross_section
-            #     logger.info(f"New channel weights: {channel_weights}")
+            
 
 
     def train(self, batch_size = None, epochs = None, lr = None, verbose: bool = False) -> Tuple[Flow, float, List[float]]:
@@ -137,7 +145,7 @@ class FlowSampler:
         
         self.model = flow
         loader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
-        self.plot_dims(file_name="phase_space_distrib_before_training.png")
+        # self.plot_dims(file_name="phase_space_distrib_before_training.png")
         
         best_loss = float('inf')
         tot_losses = []
@@ -158,11 +166,33 @@ class FlowSampler:
                     untrained_losses.append(weighted_loss.item())
             untrained_loss = sum(untrained_losses) / len(untrained_losses)
             tot_losses.append(untrained_loss)
-            if verbose:
-                print(f"Untrained model loss: {untrained_loss}")
 
         optimizer = torch.optim.Adam(flow.parameters(), lr=lr)
         progress_bar = tqdm(range(epochs), desc="Training", unit="epoch", disable=not verbose)
+
+        if settings.LIVE_TRAINING_PLOT:
+            plt.ion()
+        plt_epochs = [0]
+
+        metrics = [self.metrics(10000)]
+        metrics[-1]["loss"] = tot_losses[0]
+        total_elems = len(metrics[0].keys())
+        fig, axes = plt.subplots(nrows=(total_elems+1)//2, ncols=2, figsize=(20, 5 *2))
+        axes = axes.flatten()
+        lines = []
+        for i , key in enumerate(metrics[0].keys()):
+            # axes[i].set_title(key)
+            axes[i].set_xlabel('Training Iteration')
+            axes[i].set_ylabel(key)
+            line, = axes[i].plot(plt_epochs, metrics[0][key], label=key, marker="o")
+            lines.append(line)
+            axes[i].legend()
+        # fig, ax = plt.subplots(figsize=(10, 6))
+        # ax.set_title('Training Loss')
+        # ax.set_xlabel('Epoch')
+        # ax.set_ylabel('Loss')
+        # ax.grid(True)
+        # line, = ax.plot(plt_epochs,tot_losses)
 
         self.model = flow_best
 
@@ -220,6 +250,24 @@ class FlowSampler:
                 self.integ_metrics["variance_1000_samples"].append(res_1000["error"])
                 self.integ_metrics["variance_50_samples"].append(self.repeat_integrate(50)["error"])
                 self.integ_metrics["variance_100_samples"].append(self.repeat_integrate(100)["error"])
+                line.set_xdata(epochs)
+            plt_epochs.append(epoch+1)
+            metrics.append(self.metrics(10000))
+            metrics[-1]["loss"] = epoch_loss
+            for i, key in enumerate(metrics[-1].keys()):
+                y_vals = [metric[key] for metric in metrics]
+                lines[i].set_ydata(y_vals)
+                lines[i].set_xdata(plt_epochs)
+                axes[i].relim()
+                axes[i].autoscale_view()
+            fig.canvas.draw()
+            fig.canvas.flush_events()
+            # line.set_ydata(tot_losses)
+            # line.set_xdata(plt_epochs)
+            # ax.relim()
+            # ax.autoscale_view()
+            # fig.canvas.draw()
+            # fig.canvas.flush_events()
         self.model = flow_best
         self.losses = tot_losses
 
@@ -235,16 +283,12 @@ class FlowSampler:
         
         self.plot_dims()
         
-
-        plt.figure(figsize=(10, 6))
-        plt.plot(self.losses)
-        plt.title(f"Training Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.grid(True)
         plot_path = os.path.join(self.basepath, "loss_plot.png")
         plt.savefig(plot_path)
+        if settings.LIVE_TRAINING_PLOT:
+            plt.ioff()
         plt.close()
+
 
     def sample(self, n_samples, return_prob=True, numpy=False, force_nonzero=False, max_attempts=5, only_sample=False, c=None):
         with torch.no_grad():
@@ -257,7 +301,19 @@ class FlowSampler:
                 )
             else:
                 if c is None:
-                    raise ValueError("Channel number must be provided for multi-channel sampling.")
+                    outputs = []
+                    for i in range(self.channel_count):
+                        channel_number = (i+0.5) / self.channel_count
+                        c = torch.full((n_samples,), channel_number).to(self.device).unsqueeze(1)
+                        outputs.append(self.model.sample(
+                            n_samples,
+                            return_prob=True,
+                            c=c,
+                            device=self.device
+                        ))
+                    x = torch.cat([out[0] for out in outputs])
+                    prob = torch.cat([out[1] for out in outputs])
+                    # raise ValueError("Channel number must be provided for multi-channel sampling.")
                 if isinstance(c, float):
                     c = torch.full((n_samples,), c).to(self.device).unsqueeze(1)
                 x, prob = self.model.sample(
@@ -276,6 +332,10 @@ class FlowSampler:
                 return x
             else:
                 return x.cpu().numpy()
+        # print(f"Prob < 1: {torch.sum(prob < 0.5).item()}/{n_samples} ({torch.sum(prob < 0.5).item()/n_samples*100:.2f}%)")
+        # x = x[prob > 0.5]
+        # prob = prob[prob > 0.5]
+        # n_samples = len(x)
         func_vals = self.matrix_callback(x, self.channel_number)
         zero_count = torch.sum(func_vals == 0).item()
         if zero_count == n_samples:
@@ -342,13 +402,65 @@ class FlowSampler:
                 return x, func_vals
             else:
                 return x.cpu().numpy(), func_vals.cpu().numpy()
+            
+    def _metrics(self, prob, func_vals, n_samples):
+        metrics = self._integrate(func_vals, prob, n_samples)
+        weights = func_vals / prob
+        
+        zero_func_vals = np.where(func_vals == 0)[0]
+        zero_weights = np.where(weights == 0)[0]
 
-    def _integrate(self, func_vals, prob, sample_size):
+        reference_weight = weights.max()
+
+        nonzero_weights = weights[weights > 0]
+        unweighting_efficiency = weights.mean()/reference_weight*100
+        weight_mean = weights.mean()
+
+        est_accepted_points = nonzero_weights.sum()/(reference_weight*0.5)/n_samples*100*(float(len(zero_func_vals))/n_samples)
+        # metrics["est_accepted_points"] = est_accepted_points
+
+        metrics["unweighting_efficiency"] = unweighting_efficiency
+        metrics["weight_mean"] = weight_mean
+        metrics["max_weight"] = reference_weight
+        metrics["zero_weights"] = len(zero_weights)
+        to_del = ["ess","zero_count", ]
+        for i in to_del:
+            if i in metrics:
+                del metrics[i]
+        return metrics
+        
+
+    def metrics(self, n_samples):
+        if self.single_channel:
+            x, prob, func_vals = self.sample(n_samples, return_prob=True, numpy=True)
+            return self._metrics(prob, func_vals, n_samples)
+        else:
+            metric_list = []
+            for i in range(self.channel_count):
+                channel_number = (i+0.5) / self.channel_count
+                x, prob, func_vals = self.sample(n_samples, return_prob=True, numpy=True, c=channel_number)
+                metric_list.append(self._metrics(prob, func_vals, n_samples))
+            # Combine metrics from all channels
+            combined_metrics = {}
+            combined_metrics["max_weight"] = np.max([metric["max_weight"] for metric in metric_list])
+            combined_metrics["weight_mean"] = np.mean([metric["weight_mean"] for metric in metric_list])
+            combined_metrics["unweighting_efficiency"] = np.mean([metric["unweighting_efficiency"] for metric in metric_list])
+            combined_metrics["zero_weights"] = np.sum([metric["zero_weights"] for metric in metric_list])
+            return combined_metrics
+        # x, prob, func_vals = self.sample(n_samples, return_prob=True, numpy=True)
+        
+
+
+    def _integrate(self, func_vals, prob, sample_size, alpha_i = None):
         assert sample_size != 0, "Sample size cannot be zero"
         assert np.sum(prob) != 0, "Summed probability cannot be zero"
         zero_mask = func_vals == 0
-        weights = func_vals / prob
-        weights = np.where(prob == 0, 0, func_vals / prob)
+        if alpha_i is None:
+            weights = func_vals / prob
+            weights = np.where(prob == 0, 0, func_vals / prob)
+        else:
+            weights = func_vals * alpha_i / (prob)
+            weights = np.where(prob == 0, 0, func_vals * alpha_i/ (prob))
         integral = np.sum(weights) / sample_size
         error = np.sqrt(np.var(weights) / sample_size)
         if np.sum(weights) == 0:
@@ -429,12 +541,25 @@ class FlowSampler:
     def save(self):
         model_path = os.path.join(self.basepath, "best_model.pth")
         torch.save(self.model.state_dict(), model_path)
+        param_dic = {
+            "channel_weights": list(self.channel_weights),
+        }
+        param_path = os.path.join(self.basepath, "params.json")
+        with open(param_path, "w") as f:
+            json.dump(param_dic, f)
+
     
-    def load(self, path=None):
-        self.model = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
-        if path is None:
-            path = os.path.join(self.basepath, "best_model.pth")
+    def load(self):
+        if self.single_channel:
+            self.model = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
+        else:
+            self.model = Flow(dims_in=self.n_dims, uniform_latent=True, dims_c=1).to(self.device)
+        path = os.path.join(self.basepath, "best_model.pth")
         self.model.load_state_dict(torch.load(path))
+        json_path = os.path.join(self.basepath, "params.json")
+        with open(json_path, "r") as f:
+            param_dic = json.load(f)
+        self.channel_weights = np.array(param_dic["channel_weights"])
 
 
     def plot_integration_metrics(self, img_name="integration_metrics.png"):

@@ -15,7 +15,7 @@
 #include "ThePEG/Handlers/SamplerBase.h"
 #include "BinSampler.h"
 #include <chrono>
-
+#include <fstream>
 namespace Herwig {
 
 using namespace ThePEG;
@@ -155,14 +155,12 @@ public:
   virtual bool almostUnweighted() const { return theAlmostUnweighted; }
 
 public:
-
-  /*
-  * Name of the overarching process. Used for writing statistics into proper folders/files
-  */
+/**************** */
   std::string current_process = "UNKNOWN";
 
   std::chrono::system_clock::time_point timeStart;
-
+  
+  std::ofstream* weightFile;
 
   /**
    * Return the XML element containing the grids
