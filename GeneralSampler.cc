@@ -102,6 +102,9 @@ GeneralSampler::GeneralSampler()
     }
     timeStart = std::chrono::high_resolution_clock::now();
 
+    mkdir("runstats", 0777);
+    mkdir(("runstats/"+current_process).c_str(), 0777);
+
     string weightfileName = "runstats/"+current_process+"/" + "data" + ".csv";
 
     std::ifstream infile(weightfileName.c_str());
@@ -422,10 +425,15 @@ double GeneralSampler::generate() {
         --excptTries;
       }
       
-      if ( weight != 0.0 )
-      // double newWeight = lastSampler()->generate();
-        weight *= lastSampler()->generate()/lastSampler()->referenceWeight();
-      *weightFile << weight << std::endl;
+      if ( weight != 0.0 ){
+      double newWeight = lastSampler()->generate();
+      *weightFile << newWeight << std::endl;
+        weight *= newWeight/lastSampler()->referenceWeight();
+        }
+        else{
+        *weightFile << "0.0" << std::endl;
+        }
+      
     } catch(BinSampler::NextIteration) {
       updateSamplers();
       lastSampler(samplers().upper_bound(UseRandom::rnd())->second);
@@ -444,6 +452,7 @@ double GeneralSampler::generate() {
     }
 
     theAttempts += 1;
+    // *weightFile << "ATTEMPT" << std::endl;
 
     if ( abs(weight) == 0.0 ) {
       lastSampler(samplers().upper_bound(UseRandom::rnd())->second);
@@ -779,9 +788,6 @@ generator()->log() <<"This corresponds to a cross section difference between:\n"
     std::time_t now = std::time(nullptr);
     char timestamp[20];
     std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
-
-    mkdir("runstats", 0777);
-    mkdir(("runstats/"+current_process).c_str(), 0777);
 
     ofstream statistics;
     string fileName = "runstats/"+current_process+"/" + lastSampler()->name() + "_" + std::to_string((int)theAccepts) + ".dat";
