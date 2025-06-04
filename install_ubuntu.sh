@@ -1,8 +1,17 @@
 #!/bin/bash
+
+#dependencies: list may not be complete
+#for building herwig
+#sudo apt-get install autoconf cmake
+
 #for building python
 #zlib-devel bzip2-devel openssl-devel ncurses-devel sqlite-devel readline-devel tk-devel gdbm-devel libffi-devel xz-devel
 
-export CORES=32
+# works for ubuntu 22+ if you have root to install dependencies
+# otherwise use install.sh
+# however this is less error-prone than the install.sh script
+
+export CORES=4
 BASE_DIR="$(dirname "$(pwd)")"
 
 HERWIG_HOME="$BASE_DIR/Herwig"
@@ -20,55 +29,44 @@ export PYTHON_INSTALL
 
 python_exists="false"
 
-cd $BASE_DIR
-
-
-
+#download and build python. makes sure we dont get any path issues with system installation and works without root
 if [ -f "${PYTHON_INSTALL}/bin/python3" ]; then
 	echo "Python ${PYTHON_VERSION} is already installed at ${PYTHON_INSTALL}"
 	python_exists="true"
+
 else
+	cd $BASE_DIR
 	wget https://www.python.org/ftp/python/3.10.16/Python-3.10.16.tar.xz
 	tar -xf Python-3.10.16.tar.xz
 	cd Python-3.10.16/
-	./configure \
-		--enable-shared \
-		--enable-loadable-sqlite-extensions \
-		--with-readline \
-		--enable-optimizations \
-		--with-ensurepip=install \
-		--enable-ipv6 \
-		--disable-test-suite \
-		--prefix=${PYTHON_INSTALL} \
-		&& make -j ${nCores} \
-		&& make install 
-	ln -s ${PYTHON_INSTALL}/lib64/python3.10/lib-dynload/ ${PYTHON_INSTALL}/lib/python3.10/lib-dynload	
+	./configure --prefix=$PYTHON_INSTALL \
+		    --enable-optimizations \
+		    --with-ensurepip=install \
+		    --enable-shared
+	make -j${CORES} && make install
+	cd herwig_nf_sampler
+	
 fi
 
-export LD_LIBRARY_PATH="${PYTHON_INSTALL}/lib64"
+#set paths for python and for proper linking against our new python installation
+export PATH="$PYTHON_INSTALL/bin:$PATH"
+export PYTHONHOME="$PYTHON_INSTALL"
+export PYTHONPATH="$PYTHON_INSTALL/lib/python3.10"
+export LD_LIBRARY_PATH="$PYTHON_INSTALL/lib:$LD_LIBRARY_PATH"
 
 if [ ! -f "$BASE_DIR/venv_herwig/bin/python3" ]; then
-    echo "Creating Python virtual environment..."
-    $PYTHON_INSTALL/bin/python3 -m venv "$BASE_DIR/venv_herwig"
-    
-    if [ $? -eq 0 ]; then
-        echo "Virtual environment created successfully"
-    else
-        echo "Failed to create virtual environment"
-        exit 1
-    fi
-else
-    echo "Virtual environment already exists"
+	$PYTHON_INSTALL/bin/python3 -m venv $BASE_DIR/venv_herwig
 fi
+
 
 . $BASE_DIR/venv_herwig/bin/activate 
 
-if [ "$python_exists" = "true" ]; then
+if [ ! "$python_exists" = "true" ]; then
 	#install python packages that we need for linking/can cause issues
 	pip3 install --upgrade pip
-	pip3 install cython pybind11 torch torchtestcase install numpy tqdm matplotlib python-decouple scipy
+	pip3 install cython pybind11 torch torchtestcase
 	#install python packages that are needed later (but should not cause any issues)
-	#pip3 install numpy tqdm matplotlib python-decouple scipy
+	pip3 install numpy tqdm matplotlib python-decouple scipy
 else
     echo "Assuming pip packages are already installed as python was already built"
 fi
@@ -78,18 +76,6 @@ cuda_available=$(python3 -c "import torch; print(torch.cuda.is_available())")
 if [ "$cuda_available" != "True" ]; then
   echo "Pytorch was installed without CUDA support. Check your CUDA installation. Without you will only be able to use this library for inference!"
 fi
-
-
-# build correct automake version for herwig
-if [ ! -f "$BASE_DIR/automake-1.16.5/install/bin/automake" ]; then
-	wget https://ftp.gnu.org/gnu/automake/automake-1.16.5.tar.xz
-	tar -xf automake-1.16.5.tar.xz
-	cd automake-1.16.5
-	./configure --prefix=$BASE_DIR/automake-1.16.5/install
-	make -j ${nCores} 
-	make install
-fi
-export PATH="$BASE_DIR/automake-1.16.5/install/bin:$PATH"
 
 #build herwig. See https://herwig.hepforge.org/tutorials/installation/bootstrap.html
 #lean back and enjoy. this may take a while
@@ -131,9 +117,9 @@ if [ ! -f "$MAKEFILE" ]; then
     echo "Error: Makefile.am not found at $MAKEFILE. This really shouldnt happen?"
     exit 1
 fi
-sed -i "s|-L/mnt/data-slow/Herwig/Python-3.10.16/install/lib|-L${PYTHON_INSTALL}/lib|g" "$MAKEFILE"
-sed -i "s|-I/mnt/data-slow/Herwig/Python-3.10.16/install/include/python3.10|-I${PYTHON_INSTALL}/include/python3.10|g" "$MAKEFILE"
-sed -i "s|-I/mnt/data-slow/Herwig/venv_herwig/lib/python3.10/site-packages/pybind11/include|-I${BASE_DIR}/venv_herwig/lib/python3.10/site-packages/|g" "$MAKEFILE"
+sed -i "s|-L/home/finn/.pyenv/versions/3.10.16/lib|-L${PYTHON_INSTALL}/lib|g" "$MAKEFILE"
+sed -i "s|-I/home/finn/.pyenv/versions/3.10.16/include/python3.10|-I${PYTHON_INSTALL}/include/python3.10|g" "$MAKEFILE"
+sed -i "s|-I/home/finn/.pyenv/versions/madnis/lib/python3.10/site-packages/|-I${BASE_DIR}/venv_herwig/lib/python3.10/site-packages/|g" "$MAKEFILE"
 
 cd $SAMPLING
 
@@ -144,8 +130,10 @@ cd "$BASE_DIR"
 cat << EOL > "activate_herwig"
 BASE_DIR=$BASE_DIR
 HERWIG_HOME="$BASE_DIR/Herwig"
-export LD_LIBRARY_PATH="${PYTHON_INSTALL}/lib64:${PYTHON_INSTALL}/lib64:$LD_LIBRARY_PATH"
-export PATH="$BASE_DIR/automake-1.16.5/install/bin:$PATH"
+export PATH="$PYTHON_INSTALL/bin:\$PATH"
+export LD_LIBRARY_PATH="$PYTHON_INSTALL/lib:\$LD_LIBRARY_PATH"
+export PYTHONHOME="$PYTHON_INSTALL"
+export PYTHONPATH="$PYTHON_INSTALL/lib/python3.10:$HERWIG_HOME/src/Herwig-7.3.0/Sampling/HerwigPythonSampler"
 source \$HERWIG_HOME/bin/activate
 EOL
 
