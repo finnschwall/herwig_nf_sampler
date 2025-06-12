@@ -144,7 +144,8 @@ cd "$BASE_DIR"
 cat << EOL > "activate_herwig"
 BASE_DIR=$BASE_DIR
 HERWIG_HOME="$BASE_DIR/Herwig"
-export LD_LIBRARY_PATH="${PYTHON_INSTALL}/lib64:${PYTHON_INSTALL}/lib64:$LD_LIBRARY_PATH"
+PYTHON_INSTALL="$BASE_DIR/Python-3.10.16/install"
+export LD_LIBRARY_PATH="${PYTHON_INSTALL}/lib64:${PYTHON_INSTALL}/lib:$LD_LIBRARY_PATH"
 export PATH="$BASE_DIR/automake-1.16.5/install/bin:$PATH"
 source \$HERWIG_HOME/bin/activate
 EOL

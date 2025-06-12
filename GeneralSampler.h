@@ -157,10 +157,25 @@ public:
 public:
 /**************** */
   std::string current_process = "UNKNOWN";
+  
 
   std::chrono::system_clock::time_point timeStart;
   
   std::ofstream* weightFile;
+
+   std::vector<long long> histogram;
+ std::vector<double> bin_edges;
+ double bin_width;
+ double hist_min_val;
+ double hist_max_val;
+ long long zero_count;
+
+// Function declarations
+void initHistogram(double min_val, double max_val, int num_bins);
+void addEvent(double value);
+void saveHistogram(const std::string& filename);
+long long getTotalEvents();
+void printHistogramStats();
 
   /**
    * Return the XML element containing the grids

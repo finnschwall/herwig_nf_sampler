@@ -117,6 +117,8 @@ GeneralSampler::GeneralSampler()
         }
     }
     weightFile = new ofstream(weightfileName.c_str(), std::ios::app);
+
+    initHistogram(0.0, 100.0, 10000);
     // weightFile << std::setprecision(10) << std::fixed;
 
     // weightFile->open(weightfileName, std::ios::app);
@@ -402,6 +404,72 @@ void GeneralSampler::initialize() {
 
 }
 
+void GeneralSampler::initHistogram(double min_val, double max_val, int num_bins) {
+    hist_min_val = min_val;
+    hist_max_val = max_val;
+    bin_width = (max_val - min_val) / num_bins;
+    
+    // Create histogram vector (no extra bin for zero)
+    histogram.resize(num_bins, 0);
+    
+    // Create bin edges
+    bin_edges.resize(num_bins + 1);
+    for (int i = 0; i <= num_bins; i++) {
+        bin_edges[i] = min_val + i * bin_width;
+    }
+    
+    zero_count = 0;
+    std::cout << "Histogram initialized: " << num_bins << " bins from "
+              << min_val << " to " << max_val << " (bin width: " << bin_width << ")" << std::endl;
+}
+
+void GeneralSampler::addEvent(double value) {
+    if (value == 0.0) {
+        zero_count++;
+    }
+    
+    // Calculate bin index
+    int bin_index;
+    if (value < hist_min_val) {
+        bin_index = 0; // First bin for values below range
+    } else if (value > hist_max_val) {
+        bin_index = histogram.size() - 1; // Last bin for values above range
+    } else {
+        bin_index = static_cast<int>((value - hist_min_val) / bin_width);
+        // Handle edge case where value equals max_val
+        if (bin_index >= static_cast<int>(histogram.size())) {
+            bin_index = histogram.size() - 1;
+        }
+    }
+    
+    histogram[bin_index]++;
+}
+
+void GeneralSampler::saveHistogram(const std::string& filename) {
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open file " << filename << " for writing" << std::endl;
+        return;
+    }
+    
+
+    file << "# Histogram data\n";
+    file << "# Format: bin_center,count\n";
+    file << "# min_val=" << hist_min_val << "\n";
+    file << "# max_val=" << hist_max_val << "\n";
+    file << "# bin_width=" << bin_width << "\n";
+    file << "# total_bins=" << histogram.size() - 1 << "\n";
+    file << "# zero_count=" << zero_count << "\n";
+        for (size_t i = 0; i < histogram.size() - 1; i++) {
+        double bin_center = hist_min_val + (i + 0.5) * bin_width;
+        file << bin_center << "," << histogram[i] << "\n";
+    }
+        
+    file.close();
+    
+}
+
+
 double GeneralSampler::generate() {
 
   long excptTries = 0;
@@ -427,11 +495,13 @@ double GeneralSampler::generate() {
       
       if ( weight != 0.0 ){
       double newWeight = lastSampler()->generate();
-      *weightFile << newWeight << std::endl;
+      // *weightFile << newWeight << std::endl;
         weight *= newWeight/lastSampler()->referenceWeight();
+            addEvent(weight);
         }
         else{
-        *weightFile << "0.0" << std::endl;
+          addEvent(weight);
+        // *weightFile << "0.0" << std::endl;
         }
       
     } catch(BinSampler::NextIteration) {
@@ -452,7 +522,6 @@ double GeneralSampler::generate() {
     }
 
     theAttempts += 1;
-    // *weightFile << "ATTEMPT" << std::endl;
 
     if ( abs(weight) == 0.0 ) {
       lastSampler(samplers().upper_bound(UseRandom::rnd())->second);
@@ -806,6 +875,7 @@ generator()->log() <<"This corresponds to a cross section difference between:\n"
     << "  \"SumWeights\": " << theSumWeights*theMaxWeight << ",\n"
     << "  \"SumWeights2\": " << theSumWeights2*sqr(theMaxWeight) << ",\n"
     << "  \"TimeElapsedMS\": " << duration.count() << "\n"
+    << "  \"ZeroCount\": " << zero_count << "\n"
     << "}" << endl;
 
     cout << "Short stats:\n"
@@ -815,7 +885,7 @@ generator()->log() <<"This corresponds to a cross section difference between:\n"
     << "  CrossSectionRun: " << runXSec << " +/- " << sqrt(runXSecErr) << "\n"
     << "  PointsAttempted/Accepted: " << theAttempts << "/" << theAccepts << " = " << (double)theAccepts*100/(double)theAttempts << "%" << endl;
 
-
+    saveHistogram("runstats/histogram_output.csv");
     statistics.close();
     weightFile->close();
 
