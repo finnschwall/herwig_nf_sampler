@@ -495,7 +495,9 @@ double GeneralSampler::generate() {
       
       if ( weight != 0.0 ){
       double newWeight = lastSampler()->generate();
-      // *weightFile << newWeight << std::endl;
+        if (newWeight != 0.0){
+          *weightFile << newWeight << std::endl;
+        }
         weight *= newWeight/lastSampler()->referenceWeight();
             addEvent(weight);
         }
