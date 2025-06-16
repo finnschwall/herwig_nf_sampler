@@ -1,0 +1,12 @@
+13:35:00-INFO: Starting training for 1 diagrams for process e- e+ -> u ubar g g
+13:35:00-INFO: Learning diagram 0 of 1: ME[e-,e+->ubar,u,g,g], PS Dim: 9, Channels: 16
+13:36:27-INFO: Dropping channels [ 1  3  5  7  9 11 13 15] with weight < 0.0005 (Exp. Weight: 0.0625)
+13:36:27-INFO: New channel weights: [0.06651389 0.         0.21410709 0.         0.0638924  0.
+ 0.20833581 0.         0.0640082  0.         0.07019887 0.
+ 0.15537241 0.         0.15757132 0.        ]
+13:36:28-INFO: Channel weights: [0.06651389 0.         0.21410709 0.         0.0638924  0.
+ 0.20833581 0.         0.0640082  0.         0.07019887 0.
+ 0.15537241 0.         0.15757132 0.        ]
+14:15:46-INFO: Training finished for 1 diagrams for process e- e+ -> u ubar g g
+14:15:46-INFO: Total time: 2446.21 seconds
+14:15:46-INFO: Total trained flows: 0

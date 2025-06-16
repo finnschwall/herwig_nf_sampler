@@ -876,7 +876,7 @@ generator()->log() <<"This corresponds to a cross section difference between:\n"
     << "  \"PercentAccepted\": " << (double)theAccepts*100/(double)theAttempts << ",\n"
     << "  \"SumWeights\": " << theSumWeights*theMaxWeight << ",\n"
     << "  \"SumWeights2\": " << theSumWeights2*sqr(theMaxWeight) << ",\n"
-    << "  \"TimeElapsedMS\": " << duration.count() << "\n"
+    << "  \"TimeElapsedMS\": " << duration.count() << ",\n"
     << "  \"ZeroCount\": " << zero_count << "\n"
     << "}" << endl;
 

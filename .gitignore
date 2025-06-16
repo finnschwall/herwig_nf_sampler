@@ -4,6 +4,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+
+
 .libs
 .deps
 CellGrids
@@ -25,3 +27,9 @@ MultiIterationStatistics.h
 
 Remapper.cc
 Remapper.h
+
+
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints

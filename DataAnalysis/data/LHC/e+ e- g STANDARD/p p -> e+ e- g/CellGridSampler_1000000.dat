@@ -1,0 +1,15 @@
+{
+  "Timestamp": "2025-06-12 20:10:11",
+  "ReferenceWeight": 32.9077,
+  "CrossSectionCombined": 0.106253,
+  "CrossSectionCombinedError": 0.000110843,
+  "CrossSectionRun": 0.106253,
+  "CrossSectionRunError": 0.000110843,
+  "PointsAttempted": 3.54501e+08,
+  "PointsAccepted": 1e+06,
+  "PercentAccepted": 0.282087,
+  "SumWeights": 3.76666e+07,
+  "SumWeights2": 1.54802e+09,
+  "TimeElapsedMS": 2256798
+  "ZeroCount": 353500604
+}

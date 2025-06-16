@@ -1,0 +1,9 @@
+16:31:01-INFO: Starting training for 1 diagrams for process e- e+ -> u ubar g g
+16:31:01-INFO: Learning diagram 0 of 1: ME[e-,e+->ubar,u,g,g], PS Dim: 9, Channels: 16
+16:41:10-INFO: Starting training for 1 diagrams for process e- e+ -> u ubar g g
+16:41:10-INFO: Learning diagram 0 of 1: ME[e-,e+->ubar,u,g,g], PS Dim: 9, Channels: 16
+16:42:17-INFO: Starting training for 1 diagrams for process e- e+ -> u ubar g g
+16:42:17-INFO: Learning diagram 0 of 1: ME[e-,e+->ubar,u,g,g], PS Dim: 9, Channels: 16
+16:51:24-INFO: Training finished for 1 diagrams for process e- e+ -> u ubar g g
+16:51:24-INFO: Total time: 547.09 seconds
+16:51:24-INFO: Total trained flows: 0

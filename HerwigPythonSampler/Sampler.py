@@ -28,6 +28,9 @@ class Sampler:
         self.current_active_matrix_element = "UNKNOWN"
         self.reference_weights = {}
         self.tot_points = 0
+        self.accepted_points = 0
+
+        self.zero_count = 0
 
         self.axes = None
         self.fig=None
@@ -83,6 +86,8 @@ class Sampler:
         
         self.samplers[matrix_name] = integrator
 
+        self.generate_n(1000000)
+
     def load(self, matrix_name, ref_weight):
         self.current_active_matrix_element = matrix_name
         if matrix_name in self.samplers:
@@ -101,6 +106,45 @@ class Sampler:
         except Exception as e:
             traceback.print_exc()
             raise e
+        
+    def generate_n(self, n, n_cache = 100000):
+        """Generate at least n accepted points from the current active matrix element."""
+        if self.accepted_points >= n:
+            with open("runstats/runstats.dat", "w") as f:
+                f.write("{")
+                f.write(f'"ZeroCount":{self.zero_count},\n')
+                f.write(f'"PointsAttempted":{self.tot_points}')
+                f.write("}")
+
+            return
+        while self.accepted_points < n:
+            print(f"{self.accepted_points}/{n}, Tot: {self.tot_points}")
+            sampler = self.samplers[self.current_active_matrix_element]
+            reference_weight = self.reference_weights[self.current_active_matrix_element]
+            if settings.SPLIT_BY_CHANNELS:
+                # channel_idx = torch.randint(0, self.channel_count, (n_cache,))
+                probs = torch.tensor(sampler.channel_weights)
+                channel_idx = torch.multinomial(probs, n_cache, replacement=True)
+                c = (channel_idx.float() + 0.5) / self.channel_count
+                c= c.to(sampler.device).unsqueeze(1)
+                x, prob, func_vals = sampler.sample(n_cache, c=c, numpy=True)
+                alpha_i = sampler.channel_weights[channel_idx]
+            else:
+                x, prob, func_vals = sampler.sample(n_cache, numpy=True)
+                # alpha_i = np.ones((n_cache, self.channel_count))
+                alpha_i = np.ones(n_cache)
+            n_cache = len(x)
+            weights =  alpha_i*func_vals / (prob)
+            non_zero_weights = weights[weights != 0]
+            with open("runstats/data.csv", "a") as f:
+                for i in non_zero_weights:
+                    f.write(f"{i}\n")
+
+            zero_weights = np.where(weights == 0)[0]
+            self.zero_count += len(zero_weights)
+            self.accepted_points += len(non_zero_weights)
+            self.tot_points += n_cache
+            self.generate_n(n)
 
     def generate(self, n_cache):
         self.tot_points += n_cache
@@ -173,6 +217,8 @@ class Sampler:
         print(np.mean((weights/max_weight)[weights/max_weight <= 1])*100)
 
         ret_tuple = (stored_x, stored_prob, stored_func_vals, len(stored_x))
+
+
         return ret_tuple
     
     def finalize(self):

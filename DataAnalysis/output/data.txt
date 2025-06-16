@@ -1,0 +1,10 @@
+Weight mean: 0.0099139
+Reference Weight: 8.14331
+Accepted Events: 22.7664571%
+Unweighting Efficiency: 2.77e-02 %
+ESS: 1.4228745%
+variance: 0.0003529
+skew: 100.0655688
+kurtosis: 26343.8592193
+convergence slope: -0.5038944+-0.0016477
+convergence intercept: -0.9110849+-0.0042883

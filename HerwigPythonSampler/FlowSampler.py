@@ -541,12 +541,13 @@ class FlowSampler:
     def save(self):
         model_path = os.path.join(self.basepath, "best_model.pth")
         torch.save(self.model.state_dict(), model_path)
-        param_dic = {
-            "channel_weights": list(self.channel_weights),
-        }
-        param_path = os.path.join(self.basepath, "params.json")
-        with open(param_path, "w") as f:
-            json.dump(param_dic, f)
+        if not self.single_channel:
+            param_dic = {
+                "channel_weights": list(self.channel_weights),
+            }
+            param_path = os.path.join(self.basepath, "params.json")
+            with open(param_path, "w") as f:
+                json.dump(param_dic, f)
 
     
     def load(self):
@@ -557,9 +558,10 @@ class FlowSampler:
         path = os.path.join(self.basepath, "best_model.pth")
         self.model.load_state_dict(torch.load(path))
         json_path = os.path.join(self.basepath, "params.json")
-        with open(json_path, "r") as f:
-            param_dic = json.load(f)
-        self.channel_weights = np.array(param_dic["channel_weights"])
+        if not self.single_channel:
+            with open(json_path, "r") as f:
+                param_dic = json.load(f)
+            self.channel_weights = np.array(param_dic["channel_weights"])
 
 
     def plot_integration_metrics(self, img_name="integration_metrics.png"):
@@ -579,7 +581,7 @@ class FlowSampler:
 
     def _plot_dims(self,cross_sections,phase_space_points, n_points=None, c=None, file_name="phase_space_distrib.png"):
         if n_points is None:
-            n_points = len(cross_sections)
+            n_points = len(cross_sections[:500000])
         samples, prob = self.sample(n_points, c=c, return_prob=True, numpy=True, only_sample=True)
 
         n_rows = (self.n_dims + 3) // 4
@@ -588,7 +590,7 @@ class FlowSampler:
         
         for dim in range(self.n_dims):
             ax = axes[dim]
-            ax.hist(phase_space_points[:,dim],weights=cross_sections, histtype="step", label="training data", bins=50, density=True)
+            ax.hist(phase_space_points[:500000,dim],weights=cross_sections[:500000], histtype="step", label="training data", bins=50, density=True)
             ax.hist(samples[:,dim],  histtype="step", label="generated", bins=50, density=True)
             # ax.hist(latent[:,dim],weights=prob ,histtype="step", label="generated", bins=50)
             ax.set_title(f'Dimension {dim}')

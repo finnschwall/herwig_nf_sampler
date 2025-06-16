@@ -187,7 +187,7 @@ void PythonSampler::initialize(bool progress) {
       std::cout << e.what() << std::endl;
     }
     // runIteration(initialPoints(),progress);
-    runIteration(10000,false);
+    // runIteration(10000,false);
     isInitialized();
 }
 
