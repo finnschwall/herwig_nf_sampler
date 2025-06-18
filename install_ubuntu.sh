@@ -80,7 +80,6 @@ fi
 #build herwig. See https://herwig.hepforge.org/tutorials/installation/bootstrap.html
 #lean back and enjoy. this may take a while
 if [ ! -f "$BASE_DIR/herwig-bootstrap.py" ]; then
-	echo "hello"
 	wget -O $BASE_DIR/herwig-bootstrap.py https://herwig.hepforge.org/downloads/herwig-bootstrap
 fi
 

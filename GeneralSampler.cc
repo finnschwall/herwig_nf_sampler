@@ -100,12 +100,13 @@ GeneralSampler::GeneralSampler()
         }
         file.close();
     }
+
     timeStart = std::chrono::high_resolution_clock::now();
 
     mkdir("runstats", 0777);
-    mkdir(("runstats/"+current_process).c_str(), 0777);
+    // mkdir(("runstats/"+current_process).c_str(), 0777);
 
-    string weightfileName = "runstats/"+current_process+"/" + "data" + ".csv";
+    string weightfileName = "runstats/data.csv";// + "data" + ".csv";
 
     std::ifstream infile(weightfileName.c_str());
     bool exists = infile.good();
@@ -861,7 +862,7 @@ generator()->log() <<"This corresponds to a cross section difference between:\n"
     std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
 
     ofstream statistics;
-    string fileName = "runstats/"+current_process+"/" + lastSampler()->name() + "_" + std::to_string((int)theAccepts) + ".dat";
+    string fileName = "runstats/" + lastSampler()->name() + "_" + std::to_string((int)theAccepts) + ".dat";
     statistics.open(fileName, std::ios::app);
 
     statistics << "{\n"

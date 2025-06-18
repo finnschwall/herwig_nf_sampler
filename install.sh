@@ -66,7 +66,7 @@ fi
 if [ "$python_exists" = "true" ]; then
 	#install python packages that we need for linking/can cause issues
 	pip3 install --upgrade pip
-	pip3 install cython pybind11 torch torchtestcase install numpy tqdm matplotlib python-decouple scipy
+	pip3 install cython pybind11 torch torchtestcase install numpy tqdm matplotlib python-decouple scipy six
 	#install python packages that are needed later (but should not cause any issues)
 	#pip3 install numpy tqdm matplotlib python-decouple scipy
 else
