@@ -95,8 +95,14 @@ class FlowSampler:
             expected_weight = 1 / self.channel_count
             print(f"Expected weight: {expected_weight}")
 
+            print(channel_weights)
+
+
             drop_threshold = float(settings.CHANNEL_DROP_THRESHOLD)*expected_weight
-            if np.sum(channel_weights > drop_threshold) > 0:
+            
+            print(drop_threshold)
+            
+            if np.sum(channel_weights < drop_threshold) > 0:
                 dropped_weights = channel_weights[channel_weights < drop_threshold]
                 logger.info(f"Dropping channels {np.where(channel_weights < drop_threshold)[0]} with weight < {max(dropped_weights):.4f} (Exp. Weight: {expected_weight:.4f})")
                 #recalculate to make sure weights sum to 1
@@ -119,7 +125,7 @@ class FlowSampler:
             
         
             self.dataset = Dataset.PhaseSpaceChannelDataset(combined_phase_space, combined_cross_section, channel_numbers, channel_weights, device=self.device)
-            logger.info(f"Channel weights: {self.channel_weights}")
+            # logger.info(f"Channel weights: {self.channel_weights}")
             
 
             
