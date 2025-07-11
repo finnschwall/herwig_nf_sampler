@@ -1,4 +1,5 @@
 from abc import abstractmethod
+import copy
 import os
 import torch
 import numpy as np
@@ -50,6 +51,15 @@ class FlowSampler:
         self.dataset = None
         self.model = None
         self.channel_weights = None
+
+        if self.single_channel:
+            self.model = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
+            self.best_model = copy.deepcopy(self.model)
+            # self.best_model = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
+            
+        else:
+            self.model = Flow(dims_in=self.n_dims, uniform_latent=True, dims_c=1).to(self.device)
+            self.best_model = copy.deepcopy(self.model)
 
     
     def matrix_callback(self, x, channel=None):
@@ -139,17 +149,18 @@ class FlowSampler:
         if not lr:
             lr = settings.LEARNING_RATE
         
-        
+        flow = self.model
+        flow_best = self.best_model
 
-        if self.single_channel:
-            flow = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
-            flow_best = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
+        # if self.single_channel:
+        #     flow = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
+        #     flow_best = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
             
-        else:
-            flow = Flow(dims_in=self.n_dims, uniform_latent=True, dims_c=1).to(self.device)
-            flow_best = Flow(dims_in=self.n_dims, uniform_latent=True, dims_c=1).to(self.device)
+        # else:
+        #     flow = Flow(dims_in=self.n_dims, uniform_latent=True, dims_c=1).to(self.device)
+        #     flow_best = Flow(dims_in=self.n_dims, uniform_latent=True, dims_c=1).to(self.device)
         
-        self.model = flow
+        # self.model = flow
         loader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
         # self.plot_dims(file_name="phase_space_distrib_before_training.png")
         
@@ -274,6 +285,8 @@ class FlowSampler:
             # ax.autoscale_view()
             # fig.canvas.draw()
             # fig.canvas.flush_events()
+        self.model = copy.deepcopy(flow_best)
+        self.best_model = copy.deepcopy(flow_best)
         self.model = flow_best
         self.losses = tot_losses
 
@@ -287,13 +300,32 @@ class FlowSampler:
             self.plot_integral(label="Trained model 4", close_plot=True, save=True)
             self.plot_integration_metrics()
         
-        self.plot_dims()
+        if settings.PLOT_DIMS:
+            self.plot_dims()
         
         plot_path = os.path.join(self.basepath, "loss_plot.png")
         plt.savefig(plot_path)
         if settings.LIVE_TRAINING_PLOT:
             plt.ioff()
         plt.close()
+        return metrics
+    
+    def get_ps_points(self, n_points: int = 1000000):
+        if settings.SPLIT_BY_CHANNELS:
+            # channel_idx = torch.randint(0, self.channel_count, (n_cache,))
+            probs = torch.tensor(self.channel_weights)
+            channel_idx = torch.multinomial(probs, n_cache, replacement=True)
+            c = (channel_idx.float() + 0.5) / self.channel_count
+            c= c.to(self.device).unsqueeze(1)
+            x, prob, func_vals = self.sample(n_cache, c=c, numpy=True)
+            alpha_i = self.channel_weights[channel_idx]
+        else:
+            x, prob, func_vals = self.sample(n_cache, numpy=True)
+            # alpha_i = np.ones((n_cache, self.channel_count))
+            alpha_i = np.ones(n_cache)
+        n_cache = len(x)
+        weights =  alpha_i*func_vals / (prob)
+        non_zero_weights = weights[weights != 0]
 
 
     def sample(self, n_samples, return_prob=True, numpy=False, force_nonzero=False, max_attempts=5, only_sample=False, c=None):

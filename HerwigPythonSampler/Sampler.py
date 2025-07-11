@@ -11,6 +11,73 @@ from FlowSampler import FlowSampler
 
 logger = logging.getLogger('main')
 
+def visualize_metrics(data, figsize=(15, 12)):
+    """
+    Visualize all metrics from the data as subplots with error bars.
+    
+    Parameters:
+    -----------
+    data : list of dict
+        List of dictionaries containing metric data with values and errors
+    figsize : tuple, optional
+        Figure size (width, height), default is (15, 12)
+    """
+    
+    # Define metrics to plot (excluding those without error bars)
+    metrics_config = [
+        ('integral', 'integral_error', 'Integral'),
+        ('error', 'error_error', 'Error'),
+        ('effective_sample_size', 'effective_sample_size_error', 'Effective Sample Size'),
+        ('unweighting_efficiency', 'unweighting_efficiency_error', 'Unweighting Efficiency'),
+        ('weight_mean', 'weight_mean_error', 'Weight Mean'),
+        ('max_weight', 'max_weight_error', 'Max Weight'),
+        ('loss', None, 'Loss')  # No error available for loss
+    ]
+    
+    # Create figure with subplots
+    fig, axes = plt.subplots(3, 3, figsize=figsize)
+    axes = axes.flatten()
+    
+    # Iteration indices
+    iterations = range(len(data))
+    
+    # Plot each metric
+    for i, (metric_key, error_key, title) in enumerate(metrics_config):
+        ax = axes[i]
+        
+        # Extract values
+        values = [float(d[metric_key]) for d in data]
+        
+        if error_key and error_key in data[0]:
+            # Plot with error bars
+            errors = [float(d[error_key]) for d in data]
+            ax.errorbar(iterations, values, yerr=errors, 
+                       marker='o', capsize=5, capthick=2, 
+                       linewidth=2, markersize=6)
+        else:
+            # Plot without error bars
+            ax.plot(iterations, values, marker='o', linewidth=2, markersize=6)
+        
+        ax.set_title(title, fontsize=12, fontweight='bold')
+        ax.set_xlabel('Iteration')
+        ax.set_ylabel(title)
+        ax.grid(True, alpha=0.3)
+        
+        # Format y-axis for scientific notation if values are very small
+        if max(values) < 0.01:
+            ax.ticklabel_format(style='scientific', axis='y', scilimits=(0,0))
+    
+    # Remove unused subplots
+    for i in range(len(metrics_config), len(axes)):
+        fig.delaxes(axes[i])
+    
+    plt.tight_layout()
+    plt.suptitle('Metrics Evolution Across Iterations', fontsize=16, fontweight='bold', y=0.98)
+    plt.subplots_adjust(top=0.93)
+    plt.savefig('metrics_evolution.png')
+    plt.close(fig)
+    return fig, axes
+
 class Sampler:
     def __init__(self, python_sampler, n_dims, channel_count, bin_count, channel_selection_dim, current_process):
         self.python_sampler = python_sampler
@@ -35,6 +102,59 @@ class Sampler:
         self.axes = None
         self.fig=None
 
+        self.n_train_step = 0
+        self.basepath = f"PythonSampler/{self.current_process}"
+
+        self.metrics = []
+
+    def train_step(self, integrator):
+        n_cache = 200000
+        if self.n_train_step==0:
+            ps_points = np.random.rand(n_cache, self.n_dims)
+            cross_sections = self.python_sampler.dSigDRMatrix(ps_points)
+        else:
+            if settings.SPLIT_BY_CHANNELS:
+                # channel_idx = torch.randint(0, self.channel_count, (n_cache,))
+                probs = torch.tensor(integrator.channel_weights)
+                channel_idx = torch.multinomial(probs, n_cache, replacement=True)
+                c = (channel_idx.float() + 0.5) / self.channel_count
+                c= c.to(integrator.device).unsqueeze(1)
+                x, prob, func_vals = integrator.sample(n_cache, c=c, numpy=True)
+                alpha_i = integrator.channel_weights[channel_idx]
+            else:
+                x, prob, func_vals = integrator.sample(n_cache, numpy=True)
+                alpha_i = np.ones(n_cache)
+            
+            ps_points = x
+            cross_sections = self.python_sampler.dSigDRMatrix(x)
+        self.n_train_step += 1
+        temp_basepath = self.basepath + f"/step_{self.n_train_step}"
+        integrator.basepath = temp_basepath
+        if not os.path.exists(temp_basepath):
+            os.makedirs(temp_basepath)
+        
+        integrator.prepare_data(ps_points, cross_sections)
+        metrics = integrator.train(verbose=True, epochs=15)
+        result = {}
+        for key in metrics[0].keys():
+            if key in ['zero_weights']:
+                continue
+            values = [d[key] for d in metrics]
+            result[key] = np.mean(values)
+            if key != 'loss':
+                result[key + '_error'] = np.std(values) / np.sqrt(len(values))
+        self.metrics.append(result)
+        integrator.save()
+        
+        if self.n_train_step == 10:
+            self.reference_weights[integrator.matrix_name] = max(cross_sections)
+            visualize_metrics(self.metrics)
+
+        else:
+            self.train_step(integrator)
+        
+        # self.reference_weights[matrix_name] = max(cross_sections)
+
 
     def train(self, bin_number, matrix_name):
         self.cur_bin_number = bin_number
@@ -48,8 +168,10 @@ class Sampler:
         self.current_active_matrix_element = matrix_name
         start_time = time.time()
 
-        do_train = not os.path.exists(f"PythonSampler/{self.current_process}/{matrix_name}/best_model.pth") or settings.ALWAYS_RETRAIN
-        if do_train:
+        self.basepath = f"PythonSampler/{self.current_process}/{matrix_name}"
+
+        do_train = not os.path.exists(f"{self.basepath}/best_model.pth") or settings.ALWAYS_RETRAIN
+        if do_train and not settings.MULTI_STAGE_TRAINING:
             ps_points = np.random.rand(int(settings.INITIAL_POINTS), self.n_dims)
             cross_sections = self.python_sampler.dSigDRMatrix(ps_points)
             self.reference_weights[matrix_name] = max(cross_sections)
@@ -57,19 +179,20 @@ class Sampler:
             self.reference_weights[matrix_name] = 1.0
         ps_sampling_time = time.time() - start_time
 
-        integrator = FlowSampler(self.python_sampler.dSigDRMatrix,f"PythonSampler/{self.current_process}/{matrix_name}" ,self.n_dims, self.channel_count, matrix_name=matrix_name,
+        integrator = FlowSampler(self.python_sampler.dSigDRMatrix,self.basepath ,self.n_dims, self.channel_count, matrix_name=matrix_name,
                                                     current_process_name =self.current_process, single_channel=not settings.SPLIT_BY_CHANNELS
                                                     ,channel_selection_dim=self.channel_selection_dim)
         if not do_train:
             logger.info(f"Loading existing model for {matrix_name}")
             integrator.load()
-            
-            
         else:
-            integrator.prepare_data(ps_points, cross_sections)
-            integrator.train(verbose=True)
-            integrator.save()
-            # self.process_info[matrix_name] = integrator.meta
+            if settings.MULTI_STAGE_TRAINING:
+                self.train_step(integrator)
+            else:
+                integrator.prepare_data(ps_points, cross_sections)
+                integrator.train(verbose=True)
+                integrator.save()
+                # self.process_info[matrix_name] = integrator.meta
             if bin_number == self.bin_count - 1:
                 self.process_info["end_time"] = time.time()
                 self.process_info["total_time"] = self.process_info["end_time"] - self.process_info["start_time"]
@@ -86,7 +209,7 @@ class Sampler:
         
         self.samplers[matrix_name] = integrator
 
-        self.generate_n(1000000)
+        self.generate_n(100000)
 
     def load(self, matrix_name, ref_weight):
         self.current_active_matrix_element = matrix_name
