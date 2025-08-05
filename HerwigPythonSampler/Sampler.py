@@ -7,23 +7,11 @@ import traceback
 import logging
 import matplotlib.pyplot as plt
 import torch
-from FlowSampler import FlowSampler
+from FlowSamplerMadnis import FlowSampler
 
 logger = logging.getLogger('main')
 
 def visualize_metrics(data, figsize=(15, 12)):
-    """
-    Visualize all metrics from the data as subplots with error bars.
-    
-    Parameters:
-    -----------
-    data : list of dict
-        List of dictionaries containing metric data with values and errors
-    figsize : tuple, optional
-        Figure size (width, height), default is (15, 12)
-    """
-    
-    # Define metrics to plot (excluding those without error bars)
     metrics_config = [
         ('integral', 'integral_error', 'Integral'),
         ('error', 'error_error', 'Error'),
@@ -107,34 +95,49 @@ class Sampler:
 
         self.metrics = []
 
+        self.ps_points = None
+        self.cross_sections = None
+
     def train_step(self, integrator):
-        n_cache = 200000
-        if self.n_train_step==0:
-            ps_points = np.random.rand(n_cache, self.n_dims)
-            cross_sections = self.python_sampler.dSigDRMatrix(ps_points)
-        else:
-            if settings.SPLIT_BY_CHANNELS:
-                # channel_idx = torch.randint(0, self.channel_count, (n_cache,))
-                probs = torch.tensor(integrator.channel_weights)
-                channel_idx = torch.multinomial(probs, n_cache, replacement=True)
-                c = (channel_idx.float() + 0.5) / self.channel_count
-                c= c.to(integrator.device).unsqueeze(1)
-                x, prob, func_vals = integrator.sample(n_cache, c=c, numpy=True)
-                alpha_i = integrator.channel_weights[channel_idx]
-            else:
-                x, prob, func_vals = integrator.sample(n_cache, numpy=True)
-                alpha_i = np.ones(n_cache)
-            
-            ps_points = x
-            cross_sections = self.python_sampler.dSigDRMatrix(x)
-        self.n_train_step += 1
+        n_cache = settings.PER_STAGE_POINTS
         temp_basepath = self.basepath + f"/step_{self.n_train_step}"
         integrator.basepath = temp_basepath
         if not os.path.exists(temp_basepath):
             os.makedirs(temp_basepath)
+        if self.n_train_step==0:
+            self.ps_points = np.random.rand(n_cache, self.n_dims)
+            self.cross_sections = self.python_sampler.dSigDRMatrix(self.ps_points)
+        else:
+            weights, x, prob, func_vals, n_cache = integrator.get_weights(n_cache)
+            self.ps_points = np.append(self.ps_points[::settings.SKIP_PARAM], x, axis=0)
+            self.cross_sections = np.append(self.cross_sections[::settings.SKIP_PARAM], func_vals, axis=0)
+            # ps_points = x
+            # cross_sections = func_vals#self.python_sampler.dSigDRMatrix(x)
+            plt.hist(weights, bins=1000)#, density=True)
+            plt.yscale('log')
+            plt.savefig(temp_basepath + "/weights.png")
+            plt.close()
+            plt.cla()
+            plt.clf()
+            plt.hist(func_vals, bins=1000)#, density=True)
+            plt.yscale('log')
+            plt.savefig(temp_basepath + "/func_vals.png")
+            plt.close()
+            plt.cla()
+            plt.clf()
+            plt.hist(prob, bins=1000)#, density=True)
+            plt.yscale('log')
+            plt.savefig(temp_basepath + "/prob.png")
+            plt.close()
+            plt.cla()
+            plt.clf()
+            
+        print("LEN:",len(self.ps_points))
+        self.n_train_step += 1
         
-        integrator.prepare_data(ps_points, cross_sections)
-        metrics = integrator.train(verbose=True, epochs=15)
+
+        integrator.prepare_data(self.ps_points, self.cross_sections)
+        metrics = integrator.train(verbose=True, epochs=settings.PER_STAGE_EPOCHS)
         result = {}
         for key in metrics[0].keys():
             if key in ['zero_weights']:
@@ -144,12 +147,14 @@ class Sampler:
             if key != 'loss':
                 result[key + '_error'] = np.std(values) / np.sqrt(len(values))
         self.metrics.append(result)
-        integrator.save()
-        
-        if self.n_train_step == 10:
-            self.reference_weights[integrator.matrix_name] = max(cross_sections)
-            visualize_metrics(self.metrics)
 
+        integrator.save()
+
+        if self.n_train_step == settings.NUM_STAGES:
+            self.reference_weights[integrator.matrix_name] = max(func_vals)
+            visualize_metrics(self.metrics)
+            integrator.basepath = self.basepath
+            integrator.save()
         else:
             self.train_step(integrator)
         
@@ -157,33 +162,78 @@ class Sampler:
 
 
     def train(self, bin_number, matrix_name):
+        torch.manual_seed(settings.SEED)
+        np.random.seed(settings.SEED)
         self.cur_bin_number = bin_number
+        self.basepath = f"PythonSampler/{self.current_process}/{matrix_name}"
+        do_train = not os.path.exists(f"{self.basepath}/best_model.pth") or settings.ALWAYS_RETRAIN
+        if not do_train:
+            logger.info(f"Loading existing model for {matrix_name}")
+        else:
+            logger.info(f"Training new model for {matrix_name}")
+
         if bin_number == 0:
             logger.info(f"Starting training for {self.bin_count} diagrams for process {self.current_process}")
             self.process_info["start_time"] = time.time()
             self.process_info["bin_count"] = self.bin_count
             self.process_info["n_channels"] = self.channel_count
             self.process_info["channels"] = {}
+            self.process_info["ME"] = matrix_name
+            if do_train:
+                settings_dic = {}
+                for key in settings.__dict__:
+                    if not key.startswith("__") and key.isupper():
+                        settings_dic[key] = settings.__dict__[key]
+                with open(f"PythonSampler/{self.current_process}/settings.json", "w") as f:
+                    json.dump(settings_dic, f, indent=4)
         logger.info(f"Learning diagram {bin_number} of {self.bin_count}: {matrix_name}, PS Dim: {self.n_dims}, Channels: {self.channel_count}")
         self.current_active_matrix_element = matrix_name
         start_time = time.time()
 
-        self.basepath = f"PythonSampler/{self.current_process}/{matrix_name}"
 
-        do_train = not os.path.exists(f"{self.basepath}/best_model.pth") or settings.ALWAYS_RETRAIN
         if do_train and not settings.MULTI_STAGE_TRAINING:
             ps_points = np.random.rand(int(settings.INITIAL_POINTS), self.n_dims)
-            cross_sections = self.python_sampler.dSigDRMatrix(ps_points)
+            cross_sections = np.array(self.python_sampler.dSigDRMatrix(ps_points))
+
+            if settings.NORMALIZE_CROSS_SECTIONS:
+                print(f"Max cross section: {np.max(cross_sections)}")
+                cross_sections = cross_sections / np.max(cross_sections)
+                
+
+            zero_mask = cross_sections == 0
+            num_zeros = np.sum(zero_mask)
+            print(f"Total len {len(cross_sections)}, zeros: {num_zeros}, fraction: {num_zeros/len(cross_sections):.2f}")
+
+            num_to_remove = int(settings.ZERO_POINT_REMOVAL * num_zeros)
+            zero_indices = np.where(zero_mask)[0]
+            remove_indices = np.random.choice(zero_indices, size=num_to_remove, replace=False)
+            remove_mask = np.zeros(len(cross_sections), dtype=bool)
+            remove_mask[remove_indices] = True
+            keep_mask = ~remove_mask
+            
+            ps_points = ps_points[keep_mask]
+            cross_sections = cross_sections[keep_mask]
+            print(f"Remaining: {len(cross_sections)}")
+
+
+            # zero_mask = cross_sections == 0
+            # ps_points = ps_points[~zero_mask]
+            # cross_sections = cross_sections[~zero_mask]
+            # cross_sections = np.array(cross_sections)/max(cross_sections)
+            
             self.reference_weights[matrix_name] = max(cross_sections)
         else:
             self.reference_weights[matrix_name] = 1.0
         ps_sampling_time = time.time() - start_time
+        self.process_info["sampling_time"] = ps_sampling_time
 
         integrator = FlowSampler(self.python_sampler.dSigDRMatrix,self.basepath ,self.n_dims, self.channel_count, matrix_name=matrix_name,
                                                     current_process_name =self.current_process, single_channel=not settings.SPLIT_BY_CHANNELS
                                                     ,channel_selection_dim=self.channel_selection_dim)
+        
+        train_start_time = time.time()
         if not do_train:
-            logger.info(f"Loading existing model for {matrix_name}")
+            
             integrator.load()
         else:
             if settings.MULTI_STAGE_TRAINING:
@@ -203,13 +253,18 @@ class Sampler:
                 for matrix_name, matrix_info in self.process_info["channels"].items():
                     total_remaining_channels += matrix_info["remaining_channel_count"]
                 logger.info(f"Total trained flows: {total_remaining_channels}")
-            with open(f"PythonSampler/{self.current_process}/process_info.json", "w") as f: 
-                json.dump(self.process_info, f, indent=4)
-
+            # with open(f"PythonSampler/{self.current_process}/process_info.json", "w") as f: 
+            #     json.dump(self.process_info, f, indent=4)
+        self.process_info["train_time"] = time.time() - train_start_time
         
         self.samplers[matrix_name] = integrator
+        second_start_time = time.time()
+        self.generate_n(settings.FINAL_SAMPLE_SIZE)
+        second_end_time = time.time()
+        self.process_info["generation_time"] = second_end_time - second_start_time
+        with open(f"PythonSampler/{self.current_process}/process_info.json", "w") as f: 
+            json.dump(self.process_info, f, indent=4)
 
-        self.generate_n(100000)
 
     def load(self, matrix_name, ref_weight):
         self.current_active_matrix_element = matrix_name
@@ -244,23 +299,18 @@ class Sampler:
             print(f"{self.accepted_points}/{n}, Tot: {self.tot_points}")
             sampler = self.samplers[self.current_active_matrix_element]
             reference_weight = self.reference_weights[self.current_active_matrix_element]
-            if settings.SPLIT_BY_CHANNELS:
-                # channel_idx = torch.randint(0, self.channel_count, (n_cache,))
-                probs = torch.tensor(sampler.channel_weights)
-                channel_idx = torch.multinomial(probs, n_cache, replacement=True)
-                c = (channel_idx.float() + 0.5) / self.channel_count
-                c= c.to(sampler.device).unsqueeze(1)
-                x, prob, func_vals = sampler.sample(n_cache, c=c, numpy=True)
-                alpha_i = sampler.channel_weights[channel_idx]
-            else:
-                x, prob, func_vals = sampler.sample(n_cache, numpy=True)
-                # alpha_i = np.ones((n_cache, self.channel_count))
-                alpha_i = np.ones(n_cache)
-            n_cache = len(x)
-            weights =  alpha_i*func_vals / (prob)
+
+            weights, x, prob, func_vals, n_cache = sampler.get_weights(n_cache)
+            # prob = prob/1e10
             non_zero_weights = weights[weights != 0]
             with open("runstats/data.csv", "a") as f:
                 for i in non_zero_weights:
+                    f.write(f"{i}\n")
+            with open("runstats/func_vals.csv", "a") as f:
+                for i in func_vals[func_vals != 0]:
+                    f.write(f"{i}\n")
+            with open("runstats/prob.csv", "a") as f:
+                for i in prob[func_vals != 0]:
                     f.write(f"{i}\n")
 
             zero_weights = np.where(weights == 0)[0]
@@ -273,20 +323,8 @@ class Sampler:
         self.tot_points += n_cache
         sampler = self.samplers[self.current_active_matrix_element]
         reference_weight = self.reference_weights[self.current_active_matrix_element]
-        if settings.SPLIT_BY_CHANNELS:
-            # channel_idx = torch.randint(0, self.channel_count, (n_cache,))
-            probs = torch.tensor(sampler.channel_weights)
-            channel_idx = torch.multinomial(probs, n_cache, replacement=True)
-            c = (channel_idx.float() + 0.5) / self.channel_count
-            c= c.to(sampler.device).unsqueeze(1)
-            x, prob, func_vals = sampler.sample(n_cache, c=c, numpy=True)
-            alpha_i = sampler.channel_weights[channel_idx]
-        else:
-            x, prob, func_vals = sampler.sample(n_cache, numpy=True)
-            alpha_i = np.ones((n_cache, self.channel_count))
-        n_cache = len(x)
-        weights =  alpha_i*func_vals / (prob)
 
+        weights, x, prob, func_vals, n_cache = sampler.get_weights(n_cache)
         zero_func_vals = np.where(func_vals == 0)[0]
         zero_weights = np.where(weights == 0)[0]
         # max_weight = weights.max().item()
@@ -298,8 +336,6 @@ class Sampler:
             print(f"Replacing reference weight {reference_weight:.3f} with percentile {percentile:.3f}")
             max_weight = percentile
             reference_weight = percentile
-        # if max_weight == 1:
-        #     max_weight = weights.max().item()
 
 
         nonzero_weights = weights[weights > 2]
@@ -311,6 +347,7 @@ class Sampler:
         stored_x = x.tolist()
         stored_prob = prob.tolist()
         stored_func_vals = func_vals.tolist()
+        alpha_i= None
         estimated_integral = sampler._integrate(func_vals, prob, n_cache, alpha_i=alpha_i)
         # logger.info(f"Caching. Est. Integ.:{estimated_integral['integral']:.3f}+-{estimated_integral['error']:.5f}\n"
         #             f"Ref. weight: {max_weight:.3f}, Median {np.median(weights):.3f}, Mean: {np.mean(weights):.3f}\n"

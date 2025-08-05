@@ -4,6 +4,9 @@ import torch
 import torch.nn.functional as F
 
 
+
+
+
 # TODO: replace with torch.searchsorted
 def searchsorted(bin_locations, inputs, eps=1e-6):
     bin_locations[..., -1] += eps
@@ -62,6 +65,9 @@ def unconstrained_rational_quadratic_spline(
     (
         outputs[inside_interval_mask],
         logabsdet[inside_interval_mask],
+        c_min_derivative,
+        max_derivative,
+        mean_derivative,
     ) = rational_quadratic_spline(
         inputs=inputs[inside_interval_mask],
         unnormalized_widths=unnormalized_widths[inside_interval_mask, :],
@@ -77,7 +83,7 @@ def unconstrained_rational_quadratic_spline(
         min_derivative=min_derivative,
     )
 
-    return outputs, logabsdet
+    return outputs, logabsdet, c_min_derivative, max_derivative, mean_derivative
 
 
 def rational_quadratic_spline(
@@ -127,9 +133,13 @@ def rational_quadratic_spline(
     cumwidths[..., -1] = right
     widths = cumwidths[..., 1:] - cumwidths[..., :-1]
 
+    derivative_min = unnormalized_derivatives.abs().min().item()
     derivatives = (min_derivative + F.softplus(unnormalized_derivatives)) / (
         min_derivative + math.log(2)
     )
+    derivative_max = derivatives.abs().max().item()
+    derivative_mean = derivatives.mean().item()
+    # derivative_min = derivatives.min().item()
 
     heights = F.softmax(unnormalized_heights, dim=-1)
     heights = min_bin_height + (1 - min_bin_height * num_bins) * heights
@@ -184,7 +194,7 @@ def rational_quadratic_spline(
         )
         logabsdet = torch.log(derivative_numerator) - 2 * torch.log(denominator)
 
-        return outputs, -logabsdet
+        return outputs, -logabsdet, derivative_min, derivative_max, derivative_mean
     else:
         theta = (inputs - input_cumwidths) / input_bin_widths
         theta_one_minus_theta = theta * (1 - theta)
@@ -205,4 +215,4 @@ def rational_quadratic_spline(
         )
         logabsdet = torch.log(derivative_numerator) - 2 * torch.log(denominator)
 
-        return outputs, logabsdet
+        return outputs, logabsdet, derivative_min,derivative_max, derivative_mean

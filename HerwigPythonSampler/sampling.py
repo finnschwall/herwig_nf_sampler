@@ -17,7 +17,6 @@ import re
 import logging
 from tqdm import tqdm
 import settings, Sampler
-from FlowSampler import FlowSampler
 import traceback
 
 in_files = glob.glob('*.in')

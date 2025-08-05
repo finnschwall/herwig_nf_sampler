@@ -8,6 +8,8 @@ import torch.nn as nn
 
 from .mlp import MLP, StackedMLP
 from .splines import unconstrained_rational_quadratic_spline
+from .splines_linear import unconstrained_linear_spline
+from .splines_cubic import unconstrained_cubic_spline
 
 L2PI = -0.5 * math.log(2 * math.pi)
 
@@ -132,6 +134,7 @@ class Flow(nn.Module, Distribution):
         min_bin_width: float = 1e-3,
         min_bin_height: float = 1e-3,
         min_bin_derivative: float = 1e-3,
+        spline_type = "rational_quadratic",
     ):
         """
         Args:
@@ -173,8 +176,12 @@ class Flow(nn.Module, Distribution):
             min_bin_width: minimal width of the spline bins
             min_bin_height: minimal height of the spline bins
             min_bin_derivative: minimal derivative at the spline bin edges
+            spline_type: type of spline to use ["rational_quadratic", "cubic", "linear"]
         """
         super().__init__()
+
+        self.monitor = False
+        self.monitor_data = {}
 
         self.dims_in = dims_in
         self.dims_c = dims_c
@@ -185,6 +192,7 @@ class Flow(nn.Module, Distribution):
         self.min_bin_width = min_bin_width
         self.min_bin_height = min_bin_height
         self.min_bin_derivative = min_bin_derivative
+        self.spline_type = spline_type
 
         if uniform_latent:
             self.spline_low = 0
@@ -250,15 +258,27 @@ class Flow(nn.Module, Distribution):
             else:
                 raise ValueError(f"Unknown permutation type {permutations}")
         self.condition_masks = condition_masks
-
         self.subnets = nn.ModuleList()
         for mask in self.condition_masks:
             dims_cond = torch.count_nonzero(mask)
-            self.subnets.append(
-                subnet_constructor(
-                    dims_cond + dims_c, (dims_in - dims_cond) * (3 * bins + 1)
+            if self.spline_type == "linear":
+                output_dim_per_transformed = 2 * self.bins
+                self.subnets.append(
+    subnet_constructor(
+        dims_cond + dims_c, (dims_in - dims_cond) * output_dim_per_transformed
+    )
+)
+            elif self.spline_type == "cubic":
+                subnet_output_dim = (dims_in - dims_cond) * (2 + self.bins)
+                self.subnets.append(subnet_constructor(
+    dims_cond + dims_c, subnet_output_dim)
+)
+            else:
+                self.subnets.append(
+                    subnet_constructor(
+                        dims_cond + dims_c, (dims_in - dims_cond) * (3 * bins + 1)
+                    )
                 )
-            )
 
     def _apply_mappings(
         self, x: torch.Tensor, inverse: bool, channel: list[int] | int | None
@@ -340,6 +360,10 @@ class Flow(nn.Module, Distribution):
             blocks = zip(reversed(self.condition_masks), reversed(self.subnets))
         else:
             blocks = zip(self.condition_masks, self.subnets)
+        max_derivative = 0.0
+        mean_derivative = 0.0
+        c_min_derivative = 0.0
+
         for mask, subnet in blocks:
             inv_mask = ~mask
             x_trafo = x[:, inv_mask]
@@ -354,26 +378,99 @@ class Flow(nn.Module, Distribution):
             subnet_out = subnet(x_cond, *channel_args).reshape(
                 (batch_size, x_trafo.shape[1], -1)
             )
-            x_out, block_jac = unconstrained_rational_quadratic_spline(
-                x_trafo,
-                subnet_out[:, :, : self.bins],
-                subnet_out[:, :, self.bins : 2 * self.bins],
-                subnet_out[:, :, 2 * self.bins :],
-                inverse,
-                self.spline_low,
-                self.spline_high,
-                self.spline_low,
-                self.spline_high,
-                self.min_bin_width,
-                self.min_bin_height,
-                self.min_bin_derivative,
-            )
+            if self.spline_type == "rational_quadratic":
+                x_out, block_jac, cur_min_derivative, cur_max_derivative, cur_mean_derivative = unconstrained_rational_quadratic_spline(
+                    x_trafo,
+                    subnet_out[:, :, : self.bins],
+                    subnet_out[:, :, self.bins : 2 * self.bins],
+                    subnet_out[:, :, 2 * self.bins :],
+                    inverse,
+                    self.spline_low,
+                    self.spline_high,
+                    self.spline_low,
+                    self.spline_high,
+                    self.min_bin_width,
+                    self.min_bin_height,
+                    self.min_bin_derivative,
+                )
+            elif self.spline_type == "cubic":
+                raise Exception("Not working. Inverse not stable!")
+                if self.uniform_latent:
+                    dims_transformed = x_trafo.shape[1]
+                    if subnet_out.shape[-1] != (2 + self.bins):
+                        raise ValueError(f"Subnet output dim mismatch for cubic spline: "
+                                        f"expected {2 + self.bins}, got {subnet_out.shape[-1]}")
+
+                    derivatives_left = subnet_out[:, :, 0:1]   # (batch, dims_transformed, 1)
+                    derivatives_right = subnet_out[:, :, 1:2]  # (batch, dims_transformed, 1)
+                    thetas = subnet_out[:, :, 2:]              # (batch, dims_transformed, bins)
+
+                    x_out, block_jac, cur_max_derivative, cur_mean_derivative = unconstrained_cubic_spline(
+                        x_trafo,
+                        derivatives_left,
+                        derivatives_right,
+                        thetas,
+                        inverse=inverse,
+                        left=self.spline_low,      # Should be 0.0
+                        right=self.spline_high,    # Should be 1.0
+                        bottom=self.spline_low,    # Should be 0.0
+                        top=self.spline_high,      # Should be 1.0
+                        min_derivative=self.min_bin_derivative, # Reuse this param
+                    )
+            elif self.spline_type == "linear":
+                linear_params = subnet_out[:, :, : 2 * self.bins] # Take only first 2*bins params
+
+                x_out, block_jac, cur_max_derivative, cur_mean_derivative = unconstrained_linear_spline(
+                    inputs=x_trafo,
+                    unnormalized_widths=linear_params[:, :, :self.bins],
+                    unnormalized_heights=linear_params[:, :, self.bins:],
+                    inverse=inverse,
+                    left=self.spline_low,
+                    right=self.spline_high,
+                    bottom=self.spline_low, # bottom = left for uniform [0,1]
+                    top=self.spline_high,   # top = right for uniform [0,1]
+                    min_bin_width=self.min_bin_width,
+                    min_bin_height=self.min_bin_height,
+                    # min_derivative is ignored for linear splines
+                )
+
+                
             x[:, inv_mask] = x_out
             jac += block_jac.sum(dim=1)
+
+            max_derivative = max(max_derivative, cur_max_derivative)
+            c_min_derivative = min(c_min_derivative, cur_min_derivative)
+            mean_derivative += cur_mean_derivative
+        
+        mean_derivative /= len(self.condition_masks)
+        current_block_jac = block_jac.sum(dim=1)
+        max_block_jac = current_block_jac.abs().max().item()
+        mean_block_jac = current_block_jac.mean().item()
+        std_block_jac = current_block_jac.std().item()
+
+        self.monitor_data["max_block_jac"] = max_block_jac
+        self.monitor_data["mean_block_jac"] = mean_block_jac
+        self.monitor_data["std_block_jac"] = std_block_jac
+
+        self.monitor_data["max_derivative"] = max_derivative
+        self.monitor_data["mean_derivative"] = mean_derivative
+        self.monitor_data["min_derivative"] = c_min_derivative
+
+
 
         if inverse:
             x, map_jac = self._apply_mappings(x, False, channel)
             jac += map_jac
+
+            # current_block_jac = block_jac.sum(dim=1)
+            # max_block_jac = current_block_jac.abs().max().item()
+            # mean_block_jac = current_block_jac.mean().item()
+            # std_block_jac = current_block_jac.std().item()
+            # self.monitor_data["max_jac_inverse"] = max_block_jac
+            # self.monitor_data["mean_jac_inverse"] = mean_block_jac
+            # self.monitor_data["std_jac_inverse"] = std_block_jac
+
+
 
         if channel_perm is not None:
             channel_perm_inv = torch.argsort(channel_perm)
@@ -402,6 +499,7 @@ class Flow(nn.Module, Distribution):
         channel: torch.Tensor | list[int] | int | None = None,
         c: torch.Tensor | None = None,
         return_latent: bool = False,
+        return_jacobian: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """
         Computes the log-probabilities of the input data.
@@ -425,9 +523,14 @@ class Flow(nn.Module, Distribution):
         z, jac = self.transform(x, channel, False, c)
         log_prob = self._latent_log_prob(z) + jac
         if return_latent:
+            if return_jacobian:
+                return log_prob, z, jac
             return log_prob, z
         else:
-            return log_prob
+            if return_jacobian:
+                return log_prob, jac
+            else:
+                return log_prob
 
     def prob(
         self,

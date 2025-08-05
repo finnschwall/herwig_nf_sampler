@@ -116,7 +116,8 @@ double PythonSampler::dSigDRRun(std::vector<double> p, double probability, doubl
 
 
 std::vector<double> PythonSampler::dSigDRMatrix(const std::vector<std::vector<double>>& matrix) {
-    std::vector<double> results;
+    try{
+            std::vector<double> results;
     results.reserve(matrix.size());
 
     for (const auto& row : matrix) {
@@ -124,6 +125,13 @@ std::vector<double> PythonSampler::dSigDRMatrix(const std::vector<std::vector<do
     }
 
     return results;
+
+    }
+    catch(const std::exception& e)
+    {
+       cout << "Values for matrix were out of bounds! Most likely channel selection dimension is greater 1" << endl;
+    }
+
 }
 
 
@@ -139,10 +147,10 @@ void PythonSampler::initialize(bool progress) {
     auto theDiagramDimension = eventHandler()->lumiDim() +
                           handler->xCombs()[bin()]->partonDimensions().first;
 
-    // std::cout << "p1 phasespace dim: " << handler->xCombs()[bin()]->partonDimensions().first << std::endl;
-    // std::cout << "p2 phasespace dim: " << handler->xCombs()[bin()]->partonDimensions().second << std::endl;
-    // cout << "lumiDIm:" << eventHandler()->lumiDim() << endl;
-    // cout << "theBin dim:" << eventHandler()->nDim(0) << endl;
+    std::cout << "p1 phasespace dim: " << handler->xCombs()[bin()]->partonDimensions().first << std::endl;
+    std::cout << "p2 phasespace dim: " << handler->xCombs()[bin()]->partonDimensions().second << std::endl;
+    cout << "lumiDIm:" << eventHandler()->lumiDim() << endl;
+    cout << "theBin dim:" << eventHandler()->nDim(0) << endl;
     // cout << "theBin:" << bin() << endl;
     // cout << "process: " << process() << endl;
     int binCount = handler->xCombs().size();
@@ -187,7 +195,10 @@ void PythonSampler::initialize(bool progress) {
       std::cout << e.what() << std::endl;
     }
     // runIteration(initialPoints(),progress);
-    // runIteration(10000,false);
+    // runIteration(1000000,false);
+    // cout << "final integrated cross section is ( "
+    //     << integratedXSec()/nanobarn << " +/- "
+    //     << integratedXSecErr()/nanobarn << " ) nb\n" << endl;
     isInitialized();
 }
 

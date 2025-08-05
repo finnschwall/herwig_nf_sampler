@@ -20,7 +20,47 @@ import settings
 import logging
 logger = logging.getLogger('main')
 
+import sys
+sys.path.append("/home/finn/.pyenv/versions/madnis/lib/python3.10/site-packages/")
 
+from torchflows.flows import Flow
+from torchflows.architectures import RealNVP
+import torch.nn as nn
+
+class DiagonalUniform(torch.distributions.Distribution, nn.Module):
+    def __init__(self, shape: torch.Size):
+        super().__init__(event_shape=shape, validate_args=False)
+        self.log_prob_value = 0.0
+        self.shape = shape
+
+    def sample(self, sample_shape: torch.Size = torch.Size()) -> torch.Tensor:
+        # Generate uniform random samples in [0,1]
+        return torch.rand(size=(*sample_shape, *self.event_shape))
+
+    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        if len(value.shape) <= len(self.event_shape):
+            raise ValueError("Incorrect input shape")
+        
+        # Check if all values are in [0,1]
+        in_support = (value >= 0) & (value <= 1)
+        
+        # For uniform distribution over [0,1], log_prob = log(1) = 0 for valid values
+        # and -inf for invalid values
+        elementwise_log_prob = torch.where(
+            in_support, 
+            torch.zeros_like(value), 
+            torch.full_like(value, float('-inf'))
+        )
+        
+        return sum_except_batch(elementwise_log_prob, self.event_shape)
+
+# Helper function (assuming this exists in your codebase)
+def sum_except_batch(tensor: torch.Tensor, event_shape: torch.Size) -> torch.Tensor:
+    if len(event_shape) == 0:
+        return tensor
+    # Sum over the last len(event_shape) dimensions
+    dims_to_sum = list(range(-len(event_shape), 0))
+    return tensor.sum(dim=dims_to_sum)
 
 class FlowSampler:
     def __init__(self, cpp_integrand, basepath, n_dims,
@@ -52,8 +92,11 @@ class FlowSampler:
         self.model = None
         self.channel_weights = None
 
+
         if self.single_channel:
-            self.model = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
+            # self.model = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
+            from torchflows import architectures
+            self.model = Flow(architectures.CouplingRQNSF(self.n_dims,base_distribution=DiagonalUniform(torch.Size([self.n_dims])) )).cuda() #
             self.best_model = copy.deepcopy(self.model)
             # self.best_model = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
             
@@ -90,7 +133,9 @@ class FlowSampler:
     def prepare_data(self, phase_space_points, cross_sections):
         if self.single_channel:
             cross_sections = cross_sections / np.sum(cross_sections)
-            self.dataset = Dataset.PhaseSpaceDataset(phase_space_points, cross_sections, device=self.device)
+            # self.dataset = Dataset.PhaseSpaceDataset(phase_space_points, cross_sections, device=self.device)
+            self.phase_space_points = phase_space_points
+            self.cross_sections = cross_sections
         else:
             preprocessor = Dataset.ChannelDataPreprocessor(self.channel_count)
             tot_cross_section = np.sum(cross_sections)
@@ -139,9 +184,41 @@ class FlowSampler:
             
 
             
+    def train(self, **kwargs):
+        # x = torch.tensor(self.phase_space_points, dtype=torch.float32, device=self.device)
+        # w_train = torch.tensor(self.cross_sections, dtype=torch.float32, device=self.device)
 
+        from sklearn.model_selection import train_test_split
+        x_train, x_val, w_train, w_val = train_test_split(
+            self.phase_space_points, self.cross_sections, test_size=0.2, random_state=42
+        )
+        x_train = torch.tensor(x_train, dtype=torch.float32, device=self.device)
+        w_train = torch.tensor(w_train, dtype=torch.float32, device=self.device)
+        x_val = torch.tensor(x_val, dtype=torch.float32, device=self.device)
+        w_val = torch.tensor(w_val, dtype=torch.float32, device=self.device)
 
-    def train(self, batch_size = None, epochs = None, lr = None, verbose: bool = False) -> Tuple[Flow, float, List[float]]:
+        
+
+        self.model.fit(x_train, w_train=w_train, x_val=x_val, w_val=w_val, show_progress=True, keep_best_weights=True,
+                       n_epochs=5)
+
+        metrics = [self.metrics(50000)]
+        print(metrics)
+        self.model.fit(x_train, w_train=w_train, x_val=x_val, w_val=w_val, show_progress=True, keep_best_weights=True,
+                       n_epochs=5)
+
+        metrics = [self.metrics(50000)]
+        print(metrics)
+        self.model.fit(x_train, w_train=w_train, x_val=x_val, w_val=w_val, show_progress=True, keep_best_weights=True,
+                       n_epochs=5)
+        metrics = [self.metrics(50000)]
+        print(metrics)
+        self.model.fit(x_train, w_train=w_train, x_val=x_val, w_val=w_val, show_progress=True, keep_best_weights=True,
+                       n_epochs=5)
+        metrics = [self.metrics(50000)]
+        print(metrics)
+
+    def train2(self, batch_size = None, epochs = None, lr = None, verbose: bool = False) -> Tuple[Flow, float, List[float]]:
         if not epochs:
             epochs = settings.TRAINING_EPOCHS
         if not batch_size:
@@ -152,20 +229,13 @@ class FlowSampler:
         flow = self.model
         flow_best = self.best_model
 
-        # if self.single_channel:
-        #     flow = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
-        #     flow_best = Flow(dims_in=self.n_dims, uniform_latent=True).to(self.device)
-            
-        # else:
-        #     flow = Flow(dims_in=self.n_dims, uniform_latent=True, dims_c=1).to(self.device)
-        #     flow_best = Flow(dims_in=self.n_dims, uniform_latent=True, dims_c=1).to(self.device)
-        
-        # self.model = flow
+
         loader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True)
         # self.plot_dims(file_name="phase_space_distrib_before_training.png")
         
         best_loss = float('inf')
         tot_losses = []
+        from pprint import pp
         
         flow.eval()
         with torch.no_grad():
@@ -183,15 +253,14 @@ class FlowSampler:
                     untrained_losses.append(weighted_loss.item())
             untrained_loss = sum(untrained_losses) / len(untrained_losses)
             tot_losses.append(untrained_loss)
+            
 
         optimizer = torch.optim.Adam(flow.parameters(), lr=lr)
         progress_bar = tqdm(range(epochs), desc="Training", unit="epoch", disable=not verbose)
-
         if settings.LIVE_TRAINING_PLOT:
             plt.ion()
         plt_epochs = [0]
-
-        metrics = [self.metrics(10000)]
+        metrics = [self.metrics(50000)]
         metrics[-1]["loss"] = tot_losses[0]
         total_elems = len(metrics[0].keys())
         fig, axes = plt.subplots(nrows=(total_elems+1)//2, ncols=2, figsize=(20, 5 *2))
@@ -210,35 +279,30 @@ class FlowSampler:
         # ax.set_ylabel('Loss')
         # ax.grid(True)
         # line, = ax.plot(plt_epochs,tot_losses)
-
         self.model = flow_best
 
-        if settings.COLLECT_TRAINING_INTEGRATION_METRICS:
-            self.integ_metrics = {
-                "effective_sample_sizes": [self.integrate(1000)["effective_sample_size"]],
-                "unweighting_efficiencies": [self.integrate(1000)["unweighting_efficiency"]],
-                "variance_50_samples": [self.repeat_integrate(50)["error"]],
-                "variance_100_samples": [self.repeat_integrate(100)["error"]],
-                "variance_1000_samples": [self.integrate(1000)["error"]],
-                "zero_count" : [self.integrate(1000)["zero_count"]]
-            }
-            self.plot_integral(close_plot=False, label="Untrained model 1", save=False)
-            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-            self.plot_integral(close_plot=False, label="Untrained model 2", save=False)
-            self.plot_integral(close_plot=True, label="Untrained model 2", file_name="integral_convergence_before_training.png", save=True)
 
+        monitor_data = {"total_grad_norm":[], "max_grad":[], "jac_mean":[], "jac_max":[], "jac_std":[], "jac_min": [], "log_prob_mean": [], "log_prob_std": [],
+                        "abs_log_prob_max": []}
+        jac = None
         for epoch in progress_bar:
             flow.train()
             epoch_losses = []
             if self.single_channel:
                 for phase_space, weight in loader:
                     optimizer.zero_grad()
-                    log_prob = flow.log_prob(phase_space)
+                    log_prob, jac = flow.log_prob(phase_space, return_jacobian=True)
+                    
                     weighted_loss = -(log_prob * weight).mean()
+                    # lambd = 5e-9
+                    # print(-(log_prob * weight).mean().item(), lambd*log_prob.pow(2).mean().item())
+                    # weighted_loss = -(log_prob * weight).mean() + lambd*log_prob.pow(2).mean()
                     weighted_loss.backward()
+
+                    # normalized_weight = weight / weight.sum()
+                    # loss = -(normalized_weight * log_prob).sum()
+                    # loss.backward()
+                    
                     optimizer.step()
                     epoch_losses.append(weighted_loss.item())
             else:
@@ -250,6 +314,18 @@ class FlowSampler:
                     weighted_loss.backward()
                     optimizer.step()
                     epoch_losses.append(weighted_loss.item())
+            total_grad_norm = 0
+            cur_max_grad = 0
+            for name, param in flow.named_parameters():
+                if param.grad is not None:
+                    param_grad_norm = param.grad.data.norm(2)
+                    total_grad_norm += param_grad_norm.item() ** 2
+                    cur_max_grad = max(cur_max_grad, param_grad_norm.item())
+
+                        
+            total_grad_norm = total_grad_norm ** 0.5
+            monitor_data["total_grad_norm"].append(total_grad_norm)
+            monitor_data["max_grad"].append(cur_max_grad)
             
             epoch_loss = sum(epoch_losses) / len(epoch_losses)
             tot_losses.append(epoch_loss)
@@ -269,7 +345,7 @@ class FlowSampler:
                 self.integ_metrics["variance_100_samples"].append(self.repeat_integrate(100)["error"])
                 line.set_xdata(epochs)
             plt_epochs.append(epoch+1)
-            metrics.append(self.metrics(10000))
+            metrics.append(self.metrics(50000, epoch=epoch+1))
             metrics[-1]["loss"] = epoch_loss
             for i, key in enumerate(metrics[-1].keys()):
                 y_vals = [metric[key] for metric in metrics]
@@ -277,6 +353,7 @@ class FlowSampler:
                 lines[i].set_xdata(plt_epochs)
                 axes[i].relim()
                 axes[i].autoscale_view()
+
             fig.canvas.draw()
             fig.canvas.flush_events()
             # line.set_ydata(tot_losses)
@@ -285,6 +362,38 @@ class FlowSampler:
             # ax.autoscale_view()
             # fig.canvas.draw()
             # fig.canvas.flush_events()
+
+            # for key, value in flow.monitor_data.items():
+            #     if key not in monitor_data:
+            #         monitor_data[key] = []
+            #     monitor_data[key].append(value)
+                                # print(f"Mean {jac.mean().item():.3f}, Max {jac.max().item():.3f}, Min {jac.min().item():.3f}, Std {jac.std().item():.3f}")
+
+            monitor_data["jac_max"].append(jac.mean().item())
+            monitor_data["jac_min"].append(jac.min().item())
+            monitor_data["jac_std"].append(jac.std().item())
+            monitor_data["jac_mean"].append(jac.mean().item())
+
+            monitor_data["log_prob_mean"].append(log_prob.mean().item())
+            monitor_data["log_prob_std"].append(log_prob.std().item())
+            monitor_data["abs_log_prob_max"].append(torch.abs(log_prob).max().item())
+            print(f"Mean {log_prob.mean().item():.3f}, Max {log_prob.max().item():.3f}, Min {log_prob.min().item():.3f}, Std {log_prob.std().item():.3f}")
+
+        num_plots = len(monitor_data)
+        ncols = 2
+        nrows = (num_plots + ncols - 1) // ncols
+        plt.figure(figsize=(12, 6 * nrows))
+        for i, (key, values) in enumerate(monitor_data.items(), 1):
+            plt.subplot(nrows, ncols, i)
+            plt.plot(values)
+            plt.title(key)
+            plt.xlabel("Epoch")
+            plt.ylabel(key)
+        plt.tight_layout()  # Prevents overlapping of subplots
+        plt.savefig(os.path.join(self.basepath, "all_metrics_plot.png"))
+        plt.close()
+
+
         self.model = copy.deepcopy(flow_best)
         self.best_model = copy.deepcopy(flow_best)
         self.model = flow_best
@@ -310,7 +419,8 @@ class FlowSampler:
         plt.close()
         return metrics
     
-    def get_ps_points(self, n_points: int = 1000000):
+    def get_weights(self, n_points: int = 1000000):
+        n_cache = n_points
         if settings.SPLIT_BY_CHANNELS:
             # channel_idx = torch.randint(0, self.channel_count, (n_cache,))
             probs = torch.tensor(self.channel_weights)
@@ -325,18 +435,20 @@ class FlowSampler:
             alpha_i = np.ones(n_cache)
         n_cache = len(x)
         weights =  alpha_i*func_vals / (prob)
-        non_zero_weights = weights[weights != 0]
 
+        return weights, x, prob, func_vals, n_cache
 
     def sample(self, n_samples, return_prob=True, numpy=False, force_nonzero=False, max_attempts=5, only_sample=False, c=None):
         with torch.no_grad():
             if self.single_channel:
-                x, prob, latent = self.model.sample(
+                x, prob = self.model.sample(
                     n_samples,
-                    return_prob=True,
-                    return_latent=True,
-                    device=self.device
+                    no_grad=True,
+                    return_log_prob = True
                 )
+                prob = torch.exp(prob)
+                x = torch.clamp(x, 1e-7, 0.9999)  # Ensure x is in [0, 1] range
+
             else:
                 if c is None:
                     outputs = []
@@ -374,6 +486,7 @@ class FlowSampler:
         # x = x[prob > 0.5]
         # prob = prob[prob > 0.5]
         # n_samples = len(x)
+
         func_vals = self.matrix_callback(x, self.channel_number)
         zero_count = torch.sum(func_vals == 0).item()
         if zero_count == n_samples:
@@ -468,9 +581,28 @@ class FlowSampler:
         return metrics
         
 
-    def metrics(self, n_samples):
+    def metrics(self, n_samples, epoch=None):
+
         if self.single_channel:
             x, prob, func_vals = self.sample(n_samples, return_prob=True, numpy=True)
+            if epoch is not None and (epoch % 5 == 0 or epoch == 1):
+                fig, ax1 = plt.subplots()
+                color = 'tab:blue'
+                n1, bins, patches = ax1.hist(prob, bins=50, color=color, alpha=0.7)
+                ax1.set_yscale('log')
+                ax1.set_xlabel('Value')
+                ax1.set_ylabel('Probability', color=color)
+                ax1.tick_params(axis='y', labelcolor=color)
+
+                ax2 = ax1.twinx()
+                color = 'tab:red'
+                # ax2.hist(func_vals, bins=30, color=color, alpha=0.7)
+                n2, _, patches = ax2.hist(func_vals, bins=bins, color=color, alpha=0.7)  # Using same bins
+                ax2.set_yscale('log')
+                ax2.set_ylabel('Function Values', color=color)
+                ax2.tick_params(axis='y', labelcolor=color)
+                plt.savefig(os.path.join(self.basepath,f"epoch:{epoch}_func_vals_prob_hist.png"))
+                plt.close(fig)
             return self._metrics(prob, func_vals, n_samples)
         else:
             metric_list = []
